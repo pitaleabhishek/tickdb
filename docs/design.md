@@ -47,6 +47,7 @@ TickDB stores data under a local `.tickdb` root.
         000001.jsonl
       metadata/
         table.json
+        chunks.json
       chunks/
         000000/
           meta.json
@@ -258,4 +259,3 @@ The repo should tell a coherent story in commit history:
 6. benchmarks and final polish
 
 That history is almost as important as the final code.
-

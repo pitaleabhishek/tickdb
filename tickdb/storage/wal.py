@@ -30,8 +30,16 @@ class TablePaths:
         return self.table_root / "metadata"
 
     @property
+    def chunks_dir(self) -> Path:
+        return self.table_root / "chunks"
+
+    @property
     def table_metadata_path(self) -> Path:
         return self.metadata_dir / "table.json"
+
+    @property
+    def chunks_metadata_path(self) -> Path:
+        return self.metadata_dir / "chunks.json"
 
     @property
     def wal_path(self) -> Path:
@@ -109,4 +117,3 @@ def _normalize_row(raw_row: dict[str, Any]) -> dict[str, Any]:
         "close": float(raw_row["close"]),
         "volume": int(raw_row["volume"]),
     }
-
