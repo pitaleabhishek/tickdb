@@ -158,6 +158,16 @@ TickDB does not need a SQL parser. The query interface will be a small CLI surfa
 - aggregations
 - `group by symbol`
 
+The initial planning-only interface uses explicit repeated flags rather than SQL text, for example:
+
+```bash
+tickdb query-plan \
+  --table bars \
+  --agg avg:close \
+  --filter symbol=AAPL \
+  --filter close>100
+```
+
 Representative filters:
 
 - `symbol = AAPL`

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from tickdb.data.generator import generate_csv
+from tickdb.query.parser import build_query_spec
+from tickdb.query.planner import build_query_plan
 from tickdb.storage.compact import compact_table
 from tickdb.storage.wal import ingest_csv_to_wal
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="tickdb",
         description="QuestDB-inspired analytical database for OHLCV market data.",
@@ -50,11 +53,35 @@ def _parse_args() -> argparse.Namespace:
         default="time",
     )
 
-    return parser.parse_args()
+    query_plan_parser = subparsers.add_parser(
+        "query-plan", help="Parse and plan a query without executing it."
+    )
+    query_plan_parser.add_argument("--table", required=True)
+    query_plan_parser.add_argument("--root", type=Path, default=Path(".tickdb"))
+    query_plan_parser.add_argument(
+        "--agg",
+        action="append",
+        required=True,
+        help="Aggregation token such as count or avg:close",
+    )
+    query_plan_parser.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Filter token such as symbol=AAPL or close>100",
+    )
+    query_plan_parser.add_argument(
+        "--group-by",
+        action="append",
+        default=[],
+        help="Grouping column; currently only symbol is supported",
+    )
+
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
 
     if args.command == "generate":
         symbols = [symbol.strip() for symbol in args.symbols.split(",") if symbol.strip()]
@@ -90,6 +117,17 @@ def main() -> int:
             f"{result.rows_compacted} rows into {result.chunk_count} chunks at "
             f"{result.manifest_path}"
         )
+        return 0
+
+    if args.command == "query-plan":
+        query_spec = build_query_spec(
+            table=args.table,
+            aggregation_tokens=args.agg,
+            filter_tokens=args.filter,
+            group_by_tokens=args.group_by,
+        )
+        query_plan = build_query_plan(root=args.root, query_spec=query_spec)
+        print(json.dumps(query_plan.to_dict(), indent=2))
         return 0
 
     raise ValueError(f"unknown command: {args.command}")
