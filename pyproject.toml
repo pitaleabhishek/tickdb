@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tickdb"
+version = "0.1.0"
+description = "QuestDB-inspired analytical database for OHLCV market data"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Abhishek Pitale" }]
+dependencies = []
+
+[project.scripts]
+tickdb = "tickdb.cli:main"
+
+[tool.setuptools]
+packages = [
+  "tickdb",
+  "tickdb.data",
+  "tickdb.encoding",
+  "tickdb.native",
+  "tickdb.query",
+  "tickdb.storage",
+]
