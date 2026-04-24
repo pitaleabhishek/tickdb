@@ -12,3 +12,8 @@ Ingest into the WAL:
 tickdb ingest --table bars --file data/sample_ohlcv.csv
 ```
 
+Compact the WAL into chunked columnar files:
+
+```bash
+tickdb compact --table bars --chunk-size 10000 --layout time
+```

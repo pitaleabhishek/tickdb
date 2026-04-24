@@ -32,12 +32,12 @@ Current implementation:
 
 - Synthetic OHLCV data generation
 - CSV-to-WAL ingestion
+- WAL-to-columnar compaction into chunked storage
+- Per-chunk metadata and table-level chunk manifest
 - Project packaging, CLI, and test scaffolding
 
 Planned next:
 
-- WAL-to-columnar compaction into chunked storage
-- Column encodings and chunk metadata
 - Query planning, pruning, and aggregation
 - mmap-based reads and native scan kernel benchmarks
 
@@ -63,6 +63,7 @@ The intended storage model is per-table, per-chunk columnar layout:
         000001.jsonl
       metadata/
         table.json
+        chunks.json
       chunks/
         000000/
           meta.json
@@ -91,6 +92,7 @@ Additional design notes live in:
 
 - [docs/design.md](docs/design.md)
 - [docs/architecture.md](docs/architecture.md)
+- [docs/milestone-04-compaction.md](docs/milestone-04-compaction.md)
 
 ## Quickstart
 
@@ -117,10 +119,19 @@ tickdb ingest \
   --file data/sample_ohlcv.csv
 ```
 
-The WAL is written under:
+Compact the WAL into chunked columnar storage:
+
+```bash
+tickdb compact \
+  --table bars \
+  --chunk-size 10000 \
+  --layout time
+```
+
+The resulting storage lives under:
 
 ```text
-.tickdb/tables/bars/wal/000001.jsonl
+.tickdb/tables/bars/
 ```
 
 Run tests:

@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from tickdb.data.generator import generate_csv
+from tickdb.storage.compact import compact_table
 from tickdb.storage.wal import ingest_csv_to_wal
 
 
@@ -37,6 +38,18 @@ def _parse_args() -> argparse.Namespace:
     ingest_parser.add_argument("--file", type=Path, required=True)
     ingest_parser.add_argument("--root", type=Path, default=Path(".tickdb"))
 
+    compact_parser = subparsers.add_parser(
+        "compact", help="Compact WAL rows into chunked columnar storage."
+    )
+    compact_parser.add_argument("--table", required=True)
+    compact_parser.add_argument("--root", type=Path, default=Path(".tickdb"))
+    compact_parser.add_argument("--chunk-size", type=int, default=10_000)
+    compact_parser.add_argument(
+        "--layout",
+        choices=["time", "symbol_time"],
+        default="time",
+    )
+
     return parser.parse_args()
 
 
@@ -65,9 +78,22 @@ def main() -> int:
         print(f"ingested {rows_written} rows into {wal_path}")
         return 0
 
+    if args.command == "compact":
+        result = compact_table(
+            root=args.root,
+            table=args.table,
+            chunk_size=args.chunk_size,
+            layout=args.layout,
+        )
+        print(
+            "compacted "
+            f"{result.rows_compacted} rows into {result.chunk_count} chunks at "
+            f"{result.manifest_path}"
+        )
+        return 0
+
     raise ValueError(f"unknown command: {args.command}")
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -10,4 +10,6 @@ build/
 *.egg-info/
 .venv/
 .tickdb/
+.tickdb_demo/
 .internal/
+data/*.csv
