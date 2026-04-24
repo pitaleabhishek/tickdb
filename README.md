@@ -34,12 +34,13 @@ Current implementation:
 - CSV-to-WAL ingestion
 - WAL-to-columnar compaction into chunked storage
 - Per-chunk metadata and table-level chunk manifest
+- mmap-based readers for fixed-width numeric and timestamp-offset columns
 - Project packaging, CLI, and test scaffolding
 
 Planned next:
 
 - Query planning, pruning, and aggregation
-- mmap-based reads and native scan kernel benchmarks
+- native scan kernel benchmarks
 
 ## Project Shape
 
@@ -93,6 +94,7 @@ Additional design notes live in:
 - [docs/design.md](docs/design.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/milestone-04-compaction.md](docs/milestone-04-compaction.md)
+- [docs/milestone-06-mmap-readers.md](docs/milestone-06-mmap-readers.md)
 
 ## Quickstart
 
