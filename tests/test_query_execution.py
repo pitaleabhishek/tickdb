@@ -31,7 +31,20 @@ class QueryExecutionTests(unittest.TestCase):
             result = execute_query(root=root, query_spec=query_spec)
 
             self.assertEqual(result.rows, [{"count": 6}])
-            self.assertEqual(result.selected_chunk_count, 3)
+            self.assertEqual(
+                result.metrics.to_dict(),
+                {
+                    "total_chunks": 3,
+                    "skipped_chunks": 0,
+                    "scanned_chunks": 3,
+                    "rows_available": 6,
+                    "rows_scanned": 6,
+                    "rows_matched": 6,
+                    "columns_read": [],
+                    "column_count": 0,
+                    "pruning_rate": 0.0,
+                },
+            )
 
     def test_avg_close_for_symbol_returns_correct_value(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -46,7 +59,20 @@ class QueryExecutionTests(unittest.TestCase):
             result = execute_query(root=root, query_spec=query_spec)
 
             self.assertEqual(result.rows, [{"avg_close": 11.0}])
-            self.assertEqual(result.selected_chunk_count, 1)
+            self.assertEqual(
+                result.metrics.to_dict(),
+                {
+                    "total_chunks": 3,
+                    "skipped_chunks": 2,
+                    "scanned_chunks": 1,
+                    "rows_available": 6,
+                    "rows_scanned": 2,
+                    "rows_matched": 2,
+                    "columns_read": ["symbol", "close"],
+                    "column_count": 2,
+                    "pruning_rate": 2 / 3,
+                },
+            )
 
     def test_numeric_filter_is_applied_at_row_level(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -61,7 +87,20 @@ class QueryExecutionTests(unittest.TestCase):
             result = execute_query(root=root, query_spec=query_spec)
 
             self.assertEqual(result.rows, [{"sum_volume": 320}])
-            self.assertEqual(result.selected_chunk_count, 1)
+            self.assertEqual(
+                result.metrics.to_dict(),
+                {
+                    "total_chunks": 3,
+                    "skipped_chunks": 2,
+                    "scanned_chunks": 1,
+                    "rows_available": 6,
+                    "rows_scanned": 2,
+                    "rows_matched": 1,
+                    "columns_read": ["close", "volume"],
+                    "column_count": 2,
+                    "pruning_rate": 2 / 3,
+                },
+            )
 
     def test_group_by_symbol_returns_sorted_rows(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -82,6 +121,20 @@ class QueryExecutionTests(unittest.TestCase):
                     {"symbol": "MSFT", "count": 2},
                     {"symbol": "NVDA", "count": 2},
                 ],
+            )
+            self.assertEqual(
+                result.metrics.to_dict(),
+                {
+                    "total_chunks": 3,
+                    "skipped_chunks": 0,
+                    "scanned_chunks": 3,
+                    "rows_available": 6,
+                    "rows_scanned": 6,
+                    "rows_matched": 6,
+                    "columns_read": ["symbol"],
+                    "column_count": 1,
+                    "pruning_rate": 0.0,
+                },
             )
 
     def test_cli_query_prints_json(self) -> None:
@@ -111,7 +164,20 @@ class QueryExecutionTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["table"], "bars")
             self.assertEqual(payload["rows"], [{"sum_volume": 320}])
-            self.assertEqual(payload["selected_chunk_count"], 1)
+            self.assertEqual(
+                payload["metrics"],
+                {
+                    "total_chunks": 3,
+                    "skipped_chunks": 2,
+                    "scanned_chunks": 1,
+                    "rows_available": 6,
+                    "rows_scanned": 2,
+                    "rows_matched": 1,
+                    "columns_read": ["close", "volume"],
+                    "column_count": 2,
+                    "pruning_rate": 2 / 3,
+                },
+            )
 
     def _prepare_table(self, tmp_path: Path) -> Path:
         rows = [

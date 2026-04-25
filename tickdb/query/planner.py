@@ -41,6 +41,7 @@ def build_query_plan(root: Path, query_spec: QuerySpec) -> QueryPlan:
         candidate_chunks=candidate_chunks,
         manifest_path=manifest_path,
         total_chunks=len(chunk_entries),
+        total_rows=int(manifest["total_rows"]),
     )
 
 
@@ -87,4 +88,3 @@ def _metric_value(chunk: ChunkCandidate, field_name: str) -> int | float:
     if not hasattr(chunk, field_name):
         raise ValueError(f"chunk metadata does not support field {field_name}")
     return getattr(chunk, field_name)
-

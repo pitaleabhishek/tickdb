@@ -13,7 +13,7 @@ from tickdb.query.aggregations import (
     update_aggregation_states,
 )
 from tickdb.query.filters import row_matches_filters
-from tickdb.query.models import QueryPlan, QueryResult, QuerySpec
+from tickdb.query.models import QueryMetrics, QueryPlan, QueryResult, QuerySpec
 from tickdb.query.planner import build_query_plan
 from tickdb.storage.mmap_reader import (
     Float64MmapReader,
@@ -30,10 +30,11 @@ def execute_query(root: Path, query_spec: QuerySpec) -> QueryResult:
 
 def execute_query_plan(root: Path, query_plan: QueryPlan) -> QueryResult:
     paths = TablePaths(root=root, table=query_plan.table)
+    tracker = _MetricTracker.from_query_plan(query_plan)
     rows = (
-        _execute_grouped_query(paths, query_plan)
+        _execute_grouped_query(paths, query_plan, tracker)
         if query_plan.group_by
-        else _execute_ungrouped_query(paths, query_plan)
+        else _execute_ungrouped_query(paths, query_plan, tracker)
     )
     return QueryResult(
         table=query_plan.table,
@@ -41,17 +42,18 @@ def execute_query_plan(root: Path, query_plan: QueryPlan) -> QueryResult:
         aggregations=query_plan.aggregations,
         group_by=query_plan.group_by,
         rows=rows,
-        selected_chunk_count=len(query_plan.candidate_chunks),
+        metrics=tracker.freeze(),
     )
 
 
 def _execute_ungrouped_query(
     paths: TablePaths,
     query_plan: QueryPlan,
+    tracker: _MetricTracker,
 ) -> list[dict[str, Any]]:
     states = initialize_aggregation_states(query_plan.aggregations)
 
-    for _chunk, row_values in _iter_matching_rows(paths, query_plan):
+    for _chunk, row_values in _iter_matching_rows(paths, query_plan, tracker):
         update_aggregation_states(states, row_values)
 
     return [finalize_aggregation_states(states)]
@@ -60,10 +62,11 @@ def _execute_ungrouped_query(
 def _execute_grouped_query(
     paths: TablePaths,
     query_plan: QueryPlan,
+    tracker: _MetricTracker,
 ) -> list[dict[str, Any]]:
     grouped_states: dict[tuple[Any, ...], list[AggregationState]] = {}
 
-    for _chunk, row_values in _iter_matching_rows(paths, query_plan):
+    for _chunk, row_values in _iter_matching_rows(paths, query_plan, tracker):
         group_key = tuple(row_values[column] for column in query_plan.group_by)
         states = grouped_states.setdefault(
             group_key,
@@ -84,9 +87,11 @@ def _execute_grouped_query(
 def _iter_matching_rows(
     paths: TablePaths,
     query_plan: QueryPlan,
+    tracker: _MetricTracker,
 ):
     for chunk in query_plan.candidate_chunks:
         chunk_path = paths.table_root / chunk.path
+        tracker.record_scanned_chunk(chunk.row_count)
         column_values = _load_required_columns(
             chunk_path=chunk_path,
             required_columns=query_plan.required_columns,
@@ -99,6 +104,7 @@ def _iter_matching_rows(
                 for column in query_plan.required_columns
             }
             if row_matches_filters(row_values, query_plan.filters):
+                tracker.record_matched_row()
                 yield chunk, row_values
 
 
@@ -143,3 +149,45 @@ def _read_column(
             f"column {column!r} in {chunk_path} has {len(values)} rows; expected {expected_row_count}"
         )
     return values
+
+
+class _MetricTracker:
+    def __init__(
+        self,
+        total_chunks: int,
+        rows_available: int,
+        columns_read: list[str],
+    ) -> None:
+        self.total_chunks = total_chunks
+        self.rows_available = rows_available
+        self.columns_read = columns_read
+        self.scanned_chunks = 0
+        self.rows_scanned = 0
+        self.rows_matched = 0
+
+    @classmethod
+    def from_query_plan(cls, query_plan: QueryPlan) -> _MetricTracker:
+        return cls(
+            total_chunks=query_plan.total_chunks,
+            rows_available=query_plan.total_rows,
+            columns_read=list(query_plan.required_columns),
+        )
+
+    def record_scanned_chunk(self, row_count: int) -> None:
+        self.scanned_chunks += 1
+        self.rows_scanned += row_count
+
+    def record_matched_row(self) -> None:
+        self.rows_matched += 1
+
+    def freeze(self) -> QueryMetrics:
+        skipped_chunks = self.total_chunks - self.scanned_chunks
+        return QueryMetrics(
+            total_chunks=self.total_chunks,
+            skipped_chunks=skipped_chunks,
+            scanned_chunks=self.scanned_chunks,
+            rows_available=self.rows_available,
+            rows_scanned=self.rows_scanned,
+            rows_matched=self.rows_matched,
+            columns_read=self.columns_read,
+        )

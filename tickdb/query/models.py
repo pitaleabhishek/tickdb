@@ -1,4 +1,4 @@
-"""Data models for query planning."""
+"""Data models for query planning and execution."""
 
 from __future__ import annotations
 
@@ -135,6 +135,7 @@ class QueryPlan:
     candidate_chunks: list[ChunkCandidate]
     manifest_path: Path
     total_chunks: int
+    total_rows: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,7 +151,42 @@ class QueryPlan:
             ],
             "manifest_path": str(self.manifest_path),
             "total_chunks": self.total_chunks,
+            "total_rows": self.total_rows,
             "selected_chunk_count": len(self.candidate_chunks),
+        }
+
+
+@dataclass(frozen=True)
+class QueryMetrics:
+    total_chunks: int
+    skipped_chunks: int
+    scanned_chunks: int
+    rows_available: int
+    rows_scanned: int
+    rows_matched: int
+    columns_read: list[str]
+
+    @property
+    def column_count(self) -> int:
+        return len(self.columns_read)
+
+    @property
+    def pruning_rate(self) -> float:
+        if self.total_chunks == 0:
+            return 0.0
+        return self.skipped_chunks / self.total_chunks
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_chunks": self.total_chunks,
+            "skipped_chunks": self.skipped_chunks,
+            "scanned_chunks": self.scanned_chunks,
+            "rows_available": self.rows_available,
+            "rows_scanned": self.rows_scanned,
+            "rows_matched": self.rows_matched,
+            "columns_read": self.columns_read,
+            "column_count": self.column_count,
+            "pruning_rate": self.pruning_rate,
         }
 
 
@@ -161,7 +197,7 @@ class QueryResult:
     aggregations: list[AggregationSpec]
     group_by: list[str]
     rows: list[dict[str, Any]]
-    selected_chunk_count: int
+    metrics: QueryMetrics
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -172,6 +208,6 @@ class QueryResult:
             ],
             "group_by": self.group_by,
             "rows": self.rows,
-            "selected_chunk_count": self.selected_chunk_count,
+            "metrics": self.metrics.to_dict(),
             "result_row_count": len(self.rows),
         }

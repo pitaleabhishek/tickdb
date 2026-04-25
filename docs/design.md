@@ -202,7 +202,7 @@ Current execution flow:
 5. read only required columns for remaining chunks
 6. apply filters
 7. aggregate result rows
-8. print deterministic JSON results
+8. print deterministic JSON results plus execution metrics
 
 Current execution scope:
 
@@ -218,7 +218,9 @@ Later metrics work should include:
 - total chunks
 - skipped chunks
 - scanned chunks
+- rows available
 - rows scanned
+- rows matched
 - columns read
 - pruning rate
 
