@@ -14,6 +14,7 @@ from tickdb.storage.compact import compact_table
 from tickdb.storage.wal import ingest_csv_to_wal
 
 FIELDNAMES = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class QueryPlanningTests(unittest.TestCase):
@@ -113,7 +114,7 @@ class QueryPlanningTests(unittest.TestCase):
                     "--filter",
                     "symbol=AAPL",
                 ],
-                cwd="/Users/abhishekpitale/tickdb",
+                cwd=REPO_ROOT,
                 check=True,
                 capture_output=True,
                 text=True,
