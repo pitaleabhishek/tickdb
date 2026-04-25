@@ -158,7 +158,7 @@ TickDB does not need a SQL parser. The query interface will be a small CLI surfa
 - aggregations
 - `group by symbol`
 
-The initial planning-only interface uses explicit repeated flags rather than SQL text, for example:
+The query interface uses explicit repeated flags rather than SQL text, for example:
 
 ```bash
 tickdb query-plan \
@@ -182,9 +182,18 @@ Representative aggregations:
 - `min`
 - `max`
 
+The execution command uses the same grammar:
+
+```bash
+tickdb query \
+  --table bars \
+  --agg avg:close \
+  --filter symbol=AAPL
+```
+
 ## Query Execution Plan
 
-Planned execution flow:
+Current execution flow:
 
 1. parse CLI arguments into a structured query
 2. identify required columns
@@ -193,9 +202,18 @@ Planned execution flow:
 5. read only required columns for remaining chunks
 6. apply filters
 7. aggregate result rows
-8. print execution metrics
+8. print deterministic JSON results
 
-Execution metrics should include:
+Current execution scope:
+
+- `count`
+- `sum`
+- `avg`
+- `min`
+- `max`
+- `group by symbol`
+
+Later metrics work should include:
 
 - total chunks
 - skipped chunks
