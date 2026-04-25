@@ -8,7 +8,7 @@ The central idea is simple:
 
 1. ingest rows into an append-only WAL
 2. compact WAL rows into chunked columnar files
-3. answer analytical queries by reading only required columns and pruning irrelevant chunks
+3. answer analytical queries by reading only required columns and pruning irrelevant chunks and blocks
 
 The submission goal is not "build a full database." The goal is to demonstrate that physical layout, column projection, and market-aware metadata materially change query cost.
 
@@ -34,17 +34,19 @@ Current implementation:
 - CSV-to-WAL ingestion
 - WAL-to-columnar compaction into chunked storage
 - Per-chunk metadata and table-level chunk manifest
+- Intra-chunk block index for finer-grained pruning inside surviving chunks
 - mmap-based readers for fixed-width numeric and timestamp-offset columns
 - query planning over chunk metadata with explicit required-column calculation
 - query execution over compacted chunks with `count/sum/avg/min/max`
 - `group by symbol` execution
-- structured pruning and scan metrics in query output
+- structured chunk-level and block-level pruning metrics in query output
 - Project packaging, CLI, and test scaffolding
 
 Planned next:
 
-- native scan kernel benchmarks
-- benchmark scripts over layout and pruning modes
+- native scan kernel
+- benchmark comparisons for Python vs native scan
+- final README/demo polish
 
 ## Project Shape
 
@@ -72,6 +74,7 @@ The intended storage model is per-table, per-chunk columnar layout:
       chunks/
         000000/
           meta.json
+          block_index.json
           symbol.dict.json
           symbol.ids.u32
           timestamp.base
@@ -89,7 +92,7 @@ TickDB follows a split write/read design:
 
 1. Incoming rows are appended to an immutable, row-oriented WAL.
 2. WAL rows are compacted into chunked columnar files.
-3. Queries read only the required columns, use chunk metadata for pruning, and aggregate over the remaining rows.
+3. Queries read only the required columns, use chunk and block metadata for pruning, and aggregate over the remaining rows.
 
 That design keeps ingestion simple while making analytical reads efficient.
 
@@ -102,6 +105,7 @@ Additional design notes live in:
 - [docs/milestone-07-query-planning.md](docs/milestone-07-query-planning.md)
 - [docs/milestone-08-query-execution.md](docs/milestone-08-query-execution.md)
 - [docs/milestone-09-pruning-metrics.md](docs/milestone-09-pruning-metrics.md)
+- [docs/milestone-10-block-index.md](docs/milestone-10-block-index.md)
 
 ## Quickstart
 
@@ -134,7 +138,8 @@ Compact the WAL into chunked columnar storage:
 tickdb compact \
   --table bars \
   --chunk-size 10000 \
-  --layout time
+  --layout time \
+  --block-size-rows 1024
 ```
 
 The resulting storage lives under:
@@ -161,7 +166,7 @@ tickdb query \
   --filter symbol=AAPL
 ```
 
-The query result includes both final rows and a nested `metrics` object for pruning and scan cost.
+The query result includes both final rows and a nested `metrics` object for chunk-level and block-level pruning plus scan cost.
 
 Run tests:
 
@@ -177,7 +182,7 @@ The project is successful if it can:
 - append rows into a per-table WAL
 - compact WAL data into chunked columnar files
 - read only required columns for a query
-- prune chunks using symbol, time, and numeric metadata
+- prune chunks and intra-chunk blocks using symbol, time, and numeric metadata
 - return correct analytical aggregates
 - benchmark full scan vs pruned scan paths
 - benchmark Python filtering vs native filtering

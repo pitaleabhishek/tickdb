@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
-from tickdb.encoding.dictionary import decode_dictionary_values
+from tickdb.encoding.dictionary import read_dictionary_file
 from tickdb.query.aggregations import (
     AggregationState,
     finalize_aggregation_states,
@@ -15,11 +16,14 @@ from tickdb.query.aggregations import (
 from tickdb.query.filters import row_matches_filters
 from tickdb.query.models import QueryMetrics, QueryPlan, QueryResult, QuerySpec
 from tickdb.query.planner import build_query_plan
+from tickdb.query.pruning import metadata_matches_filters
 from tickdb.storage.mmap_reader import (
     Float64MmapReader,
     Int64MmapReader,
     TimestampMmapReader,
+    UInt32MmapReader,
 )
+from tickdb.storage.metadata import BlockIndex, BlockMetadata, read_block_index
 from tickdb.storage.wal import TablePaths
 
 
@@ -91,64 +95,112 @@ def _iter_matching_rows(
 ):
     for chunk in query_plan.candidate_chunks:
         chunk_path = paths.table_root / chunk.path
-        tracker.record_scanned_chunk(chunk.row_count)
-        column_values = _load_required_columns(
-            chunk_path=chunk_path,
-            required_columns=query_plan.required_columns,
-            expected_row_count=chunk.row_count,
-        )
+        tracker.record_scanned_chunk()
+        block_index = _load_block_index(chunk, chunk_path)
+        tracker.record_total_blocks(len(block_index.blocks))
+        matching_blocks = [
+            block
+            for block in block_index.blocks
+            if metadata_matches_filters(block, query_plan.filters)
+        ]
+        if not matching_blocks:
+            continue
 
-        for row_index in range(chunk.row_count):
-            row_values = {
-                column: column_values[column][row_index]
-                for column in query_plan.required_columns
-            }
-            if row_matches_filters(row_values, query_plan.filters):
-                tracker.record_matched_row()
-                yield chunk, row_values
+        with _open_chunk_readers(chunk_path, query_plan.required_columns) as readers:
+            for block in matching_blocks:
+                tracker.record_scanned_block(block.row_count)
+                column_values = _read_block_columns(
+                    readers=readers,
+                    required_columns=query_plan.required_columns,
+                    row_start=block.row_start,
+                    row_stop=block.row_start + block.row_count,
+                )
+
+                for row_index in range(block.row_count):
+                    row_values = {
+                        column: column_values[column][row_index]
+                        for column in query_plan.required_columns
+                    }
+                    if row_matches_filters(row_values, query_plan.filters):
+                        tracker.record_matched_row()
+                        yield chunk, row_values
 
 
-def _load_required_columns(
+@contextmanager
+def _open_chunk_readers(
     chunk_path: Path,
     required_columns: list[str],
-    expected_row_count: int,
+) -> dict[str, Any]:
+    with ExitStack() as stack:
+        readers = {
+            column: _open_column_reader(stack, chunk_path, column)
+            for column in required_columns
+        }
+        yield readers
+
+
+def _open_column_reader(stack: ExitStack, chunk_path: Path, column: str) -> Any:
+    if column == "symbol":
+        return stack.enter_context(
+            _SymbolRangeReader(
+                dictionary_path=chunk_path / "symbol.dict.json",
+                ids_path=chunk_path / "symbol.ids.u32",
+            )
+        )
+    if column == "timestamp":
+        return stack.enter_context(
+            TimestampMmapReader(
+                chunk_path / "timestamp.base",
+                chunk_path / "timestamp.offsets.i64",
+            )
+        )
+    if column in {"open", "high", "low", "close"}:
+        return stack.enter_context(Float64MmapReader(chunk_path / f"{column}.f64"))
+    if column == "volume":
+        return stack.enter_context(Int64MmapReader(chunk_path / "volume.i64"))
+    raise ValueError(f"unsupported column for execution: {column}")
+
+
+def _read_block_columns(
+    readers: dict[str, Any],
+    required_columns: list[str],
+    row_start: int,
+    row_stop: int,
 ) -> dict[str, list[Any]]:
     return {
-        column: _read_column(chunk_path, column, expected_row_count)
+        column: readers[column].read_range(row_start, row_stop)
         for column in required_columns
     }
 
 
-def _read_column(
-    chunk_path: Path,
-    column: str,
-    expected_row_count: int,
-) -> list[Any]:
-    if column == "symbol":
-        values = decode_dictionary_values(
-            chunk_path / "symbol.dict.json",
-            chunk_path / "symbol.ids.u32",
-        )
-    elif column == "timestamp":
-        with TimestampMmapReader(
-            chunk_path / "timestamp.base",
-            chunk_path / "timestamp.offsets.i64",
-        ) as reader:
-            values = reader.read_all()
-    elif column in {"open", "high", "low", "close"}:
-        with Float64MmapReader(chunk_path / f"{column}.f64") as reader:
-            values = reader.read_all()
-    elif column == "volume":
-        with Int64MmapReader(chunk_path / "volume.i64") as reader:
-            values = reader.read_all()
-    else:
-        raise ValueError(f"unsupported column for execution: {column}")
-
-    if len(values) != expected_row_count:
-        raise ValueError(
-            f"column {column!r} in {chunk_path} has {len(values)} rows; expected {expected_row_count}"
-        )
-    return values
+def _load_block_index(chunk: Any, chunk_path: Path) -> BlockIndex:
+    block_index_path = chunk_path / "block_index.json"
+    if block_index_path.exists():
+        return read_block_index(block_index_path)
+    return BlockIndex(
+        layout="legacy",
+        block_size_rows=chunk.row_count,
+        blocks=[
+            BlockMetadata(
+                block_id=0,
+                row_start=0,
+                row_count=chunk.row_count,
+                symbols=list(chunk.symbols),
+                timestamp_min=chunk.timestamp_min,
+                timestamp_max=chunk.timestamp_max,
+                open_min=chunk.open_min,
+                open_max=chunk.open_max,
+                high_min=chunk.high_min,
+                high_max=chunk.high_max,
+                low_min=chunk.low_min,
+                low_max=chunk.low_max,
+                close_min=chunk.close_min,
+                close_max=chunk.close_max,
+                volume_min=chunk.volume_min,
+                volume_max=chunk.volume_max,
+            )
+        ],
+    )
 
 
 class _MetricTracker:
@@ -162,6 +214,8 @@ class _MetricTracker:
         self.rows_available = rows_available
         self.columns_read = columns_read
         self.scanned_chunks = 0
+        self.total_blocks = 0
+        self.scanned_blocks = 0
         self.rows_scanned = 0
         self.rows_matched = 0
 
@@ -173,8 +227,14 @@ class _MetricTracker:
             columns_read=list(query_plan.required_columns),
         )
 
-    def record_scanned_chunk(self, row_count: int) -> None:
+    def record_scanned_chunk(self) -> None:
         self.scanned_chunks += 1
+
+    def record_total_blocks(self, block_count: int) -> None:
+        self.total_blocks += block_count
+
+    def record_scanned_block(self, row_count: int) -> None:
+        self.scanned_blocks += 1
         self.rows_scanned += row_count
 
     def record_matched_row(self) -> None:
@@ -182,12 +242,36 @@ class _MetricTracker:
 
     def freeze(self) -> QueryMetrics:
         skipped_chunks = self.total_chunks - self.scanned_chunks
+        skipped_blocks = self.total_blocks - self.scanned_blocks
         return QueryMetrics(
             total_chunks=self.total_chunks,
             skipped_chunks=skipped_chunks,
             scanned_chunks=self.scanned_chunks,
+            total_blocks=self.total_blocks,
+            skipped_blocks=skipped_blocks,
+            scanned_blocks=self.scanned_blocks,
             rows_available=self.rows_available,
             rows_scanned=self.rows_scanned,
             rows_matched=self.rows_matched,
             columns_read=self.columns_read,
         )
+
+
+class _SymbolRangeReader:
+    def __init__(self, dictionary_path: Path, ids_path: Path) -> None:
+        self.dictionary_path = dictionary_path
+        self.ids_path = ids_path
+        self.dictionary_values: list[str] = []
+        self._id_reader = UInt32MmapReader(ids_path)
+
+    def __enter__(self) -> _SymbolRangeReader:
+        self.dictionary_values = read_dictionary_file(self.dictionary_path)
+        self._id_reader.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._id_reader.__exit__(exc_type, exc, tb)
+
+    def read_range(self, start: int, stop: int) -> list[str]:
+        ids = self._id_reader.read_range(start, stop)
+        return [self.dictionary_values[int(index)] for index in ids]

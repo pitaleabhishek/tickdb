@@ -48,6 +48,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     compact_parser.add_argument("--table", required=True)
     compact_parser.add_argument("--root", type=Path, default=Path(".tickdb"))
     compact_parser.add_argument("--chunk-size", type=int, default=10_000)
+    compact_parser.add_argument("--block-size-rows", type=int, default=1_024)
     compact_parser.add_argument(
         "--layout",
         choices=["time", "symbol_time"],
@@ -136,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             table=args.table,
             chunk_size=args.chunk_size,
             layout=args.layout,
+            block_size_rows=args.block_size_rows,
         )
         print(
             "compacted "

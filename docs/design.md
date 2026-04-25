@@ -17,7 +17,7 @@ The target is a serious systems prototype, not a production database.
 
 TickDB is built around one claim:
 
-> physical layout plus chunk metadata can materially reduce market-data query cost.
+> physical layout plus chunk and block metadata can materially reduce market-data query cost.
 
 Everything in the project should support that claim with code, tests, and benchmarks.
 
@@ -51,6 +51,7 @@ TickDB stores data under a local `.tickdb` root.
       chunks/
         000000/
           meta.json
+          block_index.json
           symbol.dict.json
           symbol.ids.u32
           timestamp.base
@@ -149,6 +150,33 @@ Expected fields:
 
 This is essentially a small set of zone maps plus a symbol set.
 
+## Intra-Chunk Block Index
+
+Each compacted chunk also stores a `block_index.json` file.
+
+This is a finer-grained pruning layer inside the chunk itself. Instead of treating a surviving chunk as one indivisible scan unit, TickDB splits the chunk into fixed-size row blocks and stores metadata for each block:
+
+- `block_id`
+- `row_start`
+- `row_count`
+- `symbols`
+- `timestamp_min/timestamp_max`
+- `open_min/open_max`
+- `high_min/high_max`
+- `low_min/low_max`
+- `close_min/close_max`
+- `volume_min/volume_max`
+
+This feature is inspired by Parquet-style page indexes and BRIN-style block summaries, but implemented in TickDB's own storage format.
+
+The pruning model is hierarchical:
+
+1. chunk metadata decides whether the chunk can match at all
+2. block metadata decides which row ranges inside that chunk can match
+3. exact row filters still recheck values before aggregation
+
+This keeps pruning correct while reducing unnecessary row scans inside wide surviving chunks.
+
 ## Query Model
 
 TickDB does not need a SQL parser. The query interface will be a small CLI surface that supports:
@@ -199,10 +227,12 @@ Current execution flow:
 2. identify required columns
 3. load chunk metadata
 4. prune impossible chunks
-5. read only required columns for remaining chunks
-6. apply filters
-7. aggregate result rows
-8. print deterministic JSON results plus execution metrics
+5. load block metadata for surviving chunks
+6. prune impossible blocks inside those chunks
+7. read only required columns for surviving block ranges
+8. apply exact row filters
+9. aggregate result rows
+10. print deterministic JSON results plus execution metrics
 
 Current execution scope:
 
@@ -213,16 +243,20 @@ Current execution scope:
 - `max`
 - `group by symbol`
 
-Later metrics work should include:
+Current execution metrics include:
 
 - total chunks
 - skipped chunks
 - scanned chunks
+- total blocks
+- skipped blocks
+- scanned blocks
 - rows available
 - rows scanned
 - rows matched
 - columns read
 - pruning rate
+- block pruning rate
 
 ## Native Scan Kernel
 
@@ -248,7 +282,8 @@ Core comparisons:
 
 1. full scan vs time-only pruning vs symbol-time pruning
 2. projected columns read vs total columns
-3. Python numeric filtering vs native numeric filtering
+3. chunk-only pruning vs chunk-plus-block pruning
+4. Python numeric filtering vs native numeric filtering
 
 The benchmark goal is not absolute speed. The benchmark goal is demonstrating reduced work.
 

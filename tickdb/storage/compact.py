@@ -11,8 +11,10 @@ from tickdb.encoding.delta import write_base_offset_files
 from tickdb.encoding.dictionary import write_dictionary_files
 from tickdb.encoding.plain import write_float64_file, write_int64_file
 from tickdb.storage.metadata import (
+    build_block_index,
     ChunkMetadata,
     build_chunk_metadata,
+    write_block_index,
     write_chunk_metadata,
     write_chunks_manifest,
 )
@@ -21,6 +23,7 @@ from tickdb.storage.wal import TablePaths
 LAYOUT_TIME = "time"
 LAYOUT_SYMBOL_TIME = "symbol_time"
 LAYOUT_MODES = {LAYOUT_TIME, LAYOUT_SYMBOL_TIME}
+DEFAULT_BLOCK_SIZE_ROWS = 1024
 
 
 @dataclass(frozen=True)
@@ -48,9 +51,12 @@ def compact_table(
     table: str,
     chunk_size: int,
     layout: str,
+    block_size_rows: int = DEFAULT_BLOCK_SIZE_ROWS,
 ) -> CompactionResult:
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
+    if block_size_rows <= 0:
+        raise ValueError("block_size_rows must be positive")
     if layout not in LAYOUT_MODES:
         raise ValueError(f"layout must be one of {sorted(LAYOUT_MODES)}, got {layout}")
 
@@ -73,6 +79,7 @@ def compact_table(
                 chunk_dir=paths.chunks_dir / chunk_id,
                 chunk_id=chunk_id,
                 layout=layout,
+                block_size_rows=block_size_rows,
                 rows=chunk_rows,
             )
         )
@@ -159,6 +166,7 @@ def _write_chunk(
     chunk_dir: Path,
     chunk_id: str,
     layout: str,
+    block_size_rows: int,
     rows: Sequence[BarRow],
 ) -> ChunkMetadata:
     chunk_dir.mkdir(parents=True, exist_ok=False)
@@ -199,5 +207,16 @@ def _write_chunk(
         volumes=volumes,
     )
     write_chunk_metadata(chunk_dir / "meta.json", metadata)
+    block_index = build_block_index(
+        layout=layout,
+        block_size_rows=block_size_rows,
+        symbols=symbols,
+        timestamps=timestamps,
+        opens=opens,
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        volumes=volumes,
+    )
+    write_block_index(chunk_dir / "block_index.json", block_index)
     return metadata
-

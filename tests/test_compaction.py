@@ -10,6 +10,7 @@ from tickdb.encoding.delta import decode_base_offset_files
 from tickdb.encoding.dictionary import decode_dictionary_values, read_dictionary_file
 from tickdb.encoding.plain import read_float64_file, read_int64_file
 from tickdb.storage.compact import compact_table
+from tickdb.storage.metadata import read_block_index
 from tickdb.storage.wal import ingest_csv_to_wal
 
 FIELDNAMES = ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
@@ -47,6 +48,7 @@ class CompactionTests(unittest.TestCase):
 
             chunk_dir = root / "tables" / "bars" / "chunks" / "000000"
             expected_files = {
+                "block_index.json",
                 "meta.json",
                 "symbol.dict.json",
                 "symbol.ids.u32",
@@ -112,6 +114,11 @@ class CompactionTests(unittest.TestCase):
             )
             self.assertEqual(read_float64_file(chunk_dir / "close.f64"), [10.5, 11.5])
             self.assertEqual(read_int64_file(chunk_dir / "volume.i64"), [100, 110])
+            block_index = read_block_index(chunk_dir / "block_index.json")
+            self.assertEqual(block_index.block_size_rows, 1024)
+            self.assertEqual(len(block_index.blocks), 1)
+            self.assertEqual(block_index.blocks[0].row_start, 0)
+            self.assertEqual(block_index.blocks[0].row_count, 2)
 
     def test_time_layout_orders_rows_by_timestamp_then_symbol(self) -> None:
         rows = [
@@ -145,6 +152,43 @@ class CompactionTests(unittest.TestCase):
                 ),
                 [1000, 1000, 1000, 1010],
             )
+
+    def test_compaction_writes_multiple_blocks_when_block_size_is_small(self) -> None:
+        rows = [
+            self._row("AAPL", 1000, 10.0, 11.0, 9.5, 10.5, 100),
+            self._row("AAPL", 1010, 10.5, 12.0, 10.0, 11.5, 120),
+            self._row("AAPL", 1020, 11.5, 13.0, 11.0, 12.5, 130),
+            self._row("AAPL", 1030, 12.5, 14.0, 12.0, 13.5, 140),
+        ]
+
+        with TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            csv_path = tmp_path / "input.csv"
+            root = tmp_path / ".tickdb"
+            self._write_csv(csv_path, rows)
+            ingest_csv_to_wal(root=root, table="bars", csv_path=csv_path)
+
+            compact_table(
+                root=root,
+                table="bars",
+                chunk_size=10,
+                layout="symbol_time",
+                block_size_rows=2,
+            )
+
+            block_index = read_block_index(
+                root / "tables" / "bars" / "chunks" / "000000" / "block_index.json"
+            )
+            self.assertEqual(block_index.block_size_rows, 2)
+            self.assertEqual(len(block_index.blocks), 2)
+            self.assertEqual(
+                [(block.block_id, block.row_start, block.row_count) for block in block_index.blocks],
+                [(0, 0, 2), (1, 2, 2)],
+            )
+            self.assertEqual(block_index.blocks[0].close_min, 10.5)
+            self.assertEqual(block_index.blocks[0].close_max, 11.5)
+            self.assertEqual(block_index.blocks[1].close_min, 12.5)
+            self.assertEqual(block_index.blocks[1].close_max, 13.5)
 
     @staticmethod
     def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:

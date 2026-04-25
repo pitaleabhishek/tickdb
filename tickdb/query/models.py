@@ -161,6 +161,9 @@ class QueryMetrics:
     total_chunks: int
     skipped_chunks: int
     scanned_chunks: int
+    total_blocks: int
+    skipped_blocks: int
+    scanned_blocks: int
     rows_available: int
     rows_scanned: int
     rows_matched: int
@@ -176,17 +179,27 @@ class QueryMetrics:
             return 0.0
         return self.skipped_chunks / self.total_chunks
 
+    @property
+    def block_pruning_rate(self) -> float:
+        if self.total_blocks == 0:
+            return 0.0
+        return self.skipped_blocks / self.total_blocks
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "total_chunks": self.total_chunks,
             "skipped_chunks": self.skipped_chunks,
             "scanned_chunks": self.scanned_chunks,
+            "total_blocks": self.total_blocks,
+            "skipped_blocks": self.skipped_blocks,
+            "scanned_blocks": self.scanned_blocks,
             "rows_available": self.rows_available,
             "rows_scanned": self.rows_scanned,
             "rows_matched": self.rows_matched,
             "columns_read": self.columns_read,
             "column_count": self.column_count,
             "pruning_rate": self.pruning_rate,
+            "block_pruning_rate": self.block_pruning_rate,
         }
 
 

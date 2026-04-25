@@ -10,6 +10,7 @@ from tickdb.storage.mmap_reader import (
     Float64MmapReader,
     Int64MmapReader,
     TimestampMmapReader,
+    UInt32MmapReader,
 )
 from tickdb.storage.wal import ingest_csv_to_wal
 
@@ -37,6 +38,13 @@ class MmapReaderTests(unittest.TestCase):
         with Int64MmapReader(chunk_dir / "volume.i64") as reader:
             self.assertEqual(reader.row_count, 4)
             self.assertEqual(reader.read_all(), [100, 120, 130, 140])
+
+    def test_uint32_reader_reads_symbol_id_range(self) -> None:
+        chunk_dir = self._prepare_chunk()
+
+        with UInt32MmapReader(chunk_dir / "symbol.ids.u32") as reader:
+            self.assertEqual(reader.row_count, 4)
+            self.assertEqual(reader.read_range(1, 3), [0, 0])
 
     def test_timestamp_reader_reconstructs_values(self) -> None:
         chunk_dir = self._prepare_chunk()

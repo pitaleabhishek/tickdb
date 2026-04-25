@@ -10,12 +10,14 @@ flowchart LR
     D --> E[Chunked Column Files]
     E --> F[Chunk Metadata]
     F --> G[Query Planner]
-    E --> G
-    G --> H[Column Projection]
-    H --> I[mmap-Based Reads]
-    I --> J[Python Scan]
-    J --> K[Aggregation]
-    K --> L[Result JSON + Metrics]
+    G --> H[Required Columns + Candidate Chunks]
+    E --> I[Block Index]
+    H --> J[Block Pruning]
+    I --> J
+    J --> K[mmap-Based Reads]
+    K --> L[Python Scan]
+    L --> M[Aggregation]
+    M --> N[Result JSON + Metrics]
 ```
 
 ## Storage Layers
@@ -52,6 +54,7 @@ Format:
 chunks/
   000000/
     meta.json
+    block_index.json
     symbol.dict.json
     symbol.ids.u32
     timestamp.base
@@ -85,6 +88,7 @@ One table directory contains two different storage layers:
       chunks/
         000000/
           meta.json
+          block_index.json
           symbol.dict.json
           symbol.ids.u32
           timestamp.base
@@ -103,6 +107,7 @@ How to read that layout:
 - `metadata/chunks.json` stores the table-level manifest for compacted chunks.
 - `chunks/000000/` is one compacted slice of rows in columnar form.
 - `meta.json` stores per-chunk statistics used for pruning.
+- `block_index.json` stores finer-grained per-block summaries used to prune inside a surviving chunk.
 - `symbol.dict.json` plus `symbol.ids.u32` store the encoded symbol column.
 - `timestamp.base` plus `timestamp.offsets.i64` store the encoded timestamp column.
 - `open/high/low/close/volume` are fixed-width binary column files.
@@ -119,14 +124,17 @@ flowchart TD
     C --> E[Load Chunk Metadata]
     E --> F{Chunk Can Match?}
     F -- No --> G[Skip Chunk]
-    F -- Yes --> H[Read Required Columns]
-    D --> H
-    H --> I[Decode Needed Values]
-    I --> J[Apply Filters]
-    J --> K[Aggregate]
-    K --> L[Collect Scan Metrics]
-    L --> M[Merge Chunk Results]
-    M --> N[Print Result JSON]
+    F -- Yes --> H[Load Block Index]
+    H --> I{Block Can Match?}
+    I -- No --> J[Skip Block]
+    I -- Yes --> K[Read Required Columns for Block Range]
+    D --> K
+    K --> L[Decode Needed Values]
+    L --> M[Apply Filters]
+    M --> N[Aggregate]
+    N --> O[Collect Scan Metrics]
+    O --> P[Merge Chunk Results]
+    P --> Q[Print Result JSON]
 ```
 
 ## Pruning Rules
@@ -137,12 +145,19 @@ Chunks can be skipped before reading column data when:
 - the query time range does not overlap chunk time bounds
 - numeric predicates cannot be satisfied from min/max metadata
 
+Surviving chunks can then prune blocks inside the chunk using the same style of summaries over smaller row ranges.
+
 Example:
 
 If a query asks for `symbol = NVDA` and `close > 500`, a chunk can be skipped if:
 
 - `NVDA` is absent from `symbols`
 - or `close_max <= 500`
+
+If the chunk survives, TickDB can still skip a block whose:
+
+- `NVDA` is absent from block `symbols`
+- or `close_max <= 500` for that block
 
 ## Layout Modes
 
