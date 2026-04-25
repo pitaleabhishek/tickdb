@@ -38,12 +38,13 @@ Current implementation:
 - query planning over chunk metadata with explicit required-column calculation
 - query execution over compacted chunks with `count/sum/avg/min/max`
 - `group by symbol` execution
+- structured pruning and scan metrics in query output
 - Project packaging, CLI, and test scaffolding
 
 Planned next:
 
-- richer execution metrics and pruning reporting
 - native scan kernel benchmarks
+- benchmark scripts over layout and pruning modes
 
 ## Project Shape
 
@@ -100,6 +101,7 @@ Additional design notes live in:
 - [docs/milestone-06-mmap-readers.md](docs/milestone-06-mmap-readers.md)
 - [docs/milestone-07-query-planning.md](docs/milestone-07-query-planning.md)
 - [docs/milestone-08-query-execution.md](docs/milestone-08-query-execution.md)
+- [docs/milestone-09-pruning-metrics.md](docs/milestone-09-pruning-metrics.md)
 
 ## Quickstart
 
@@ -158,6 +160,8 @@ tickdb query \
   --agg avg:close \
   --filter symbol=AAPL
 ```
+
+The query result includes both final rows and a nested `metrics` object for pruning and scan cost.
 
 Run tests:
 

@@ -15,7 +15,7 @@ flowchart LR
     H --> I[mmap-Based Reads]
     I --> J[Python Scan]
     J --> K[Aggregation]
-    K --> L[Result JSON]
+    K --> L[Result JSON + Metrics]
 ```
 
 ## Storage Layers
@@ -124,8 +124,9 @@ flowchart TD
     H --> I[Decode Needed Values]
     I --> J[Apply Filters]
     J --> K[Aggregate]
-    K --> L[Merge Chunk Results]
-    L --> M[Print Result JSON]
+    K --> L[Collect Scan Metrics]
+    L --> M[Merge Chunk Results]
+    M --> N[Print Result JSON]
 ```
 
 ## Pruning Rules
