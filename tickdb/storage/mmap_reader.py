@@ -86,6 +86,11 @@ class Int64MmapReader(FixedWidthMmapReader):
         super().__init__(path=path, format_code="q")
 
 
+class UInt32MmapReader(FixedWidthMmapReader):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path=path, format_code="I")
+
+
 class TimestampMmapReader:
     """Reconstruct timestamps from base + int64 offsets."""
 
@@ -120,4 +125,3 @@ def _read_base_int64(path: Path) -> int:
     if len(data) != struct.calcsize("<q"):
         raise ValueError(f"timestamp base file has invalid size: {path}")
     return int(struct.unpack("<q", data)[0])
-

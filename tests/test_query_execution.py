@@ -37,12 +37,16 @@ class QueryExecutionTests(unittest.TestCase):
                     "total_chunks": 3,
                     "skipped_chunks": 0,
                     "scanned_chunks": 3,
+                    "total_blocks": 3,
+                    "skipped_blocks": 0,
+                    "scanned_blocks": 3,
                     "rows_available": 6,
                     "rows_scanned": 6,
                     "rows_matched": 6,
                     "columns_read": [],
                     "column_count": 0,
                     "pruning_rate": 0.0,
+                    "block_pruning_rate": 0.0,
                 },
             )
 
@@ -65,12 +69,16 @@ class QueryExecutionTests(unittest.TestCase):
                     "total_chunks": 3,
                     "skipped_chunks": 2,
                     "scanned_chunks": 1,
+                    "total_blocks": 1,
+                    "skipped_blocks": 0,
+                    "scanned_blocks": 1,
                     "rows_available": 6,
                     "rows_scanned": 2,
                     "rows_matched": 2,
                     "columns_read": ["symbol", "close"],
                     "column_count": 2,
                     "pruning_rate": 2 / 3,
+                    "block_pruning_rate": 0.0,
                 },
             )
 
@@ -93,12 +101,16 @@ class QueryExecutionTests(unittest.TestCase):
                     "total_chunks": 3,
                     "skipped_chunks": 2,
                     "scanned_chunks": 1,
+                    "total_blocks": 1,
+                    "skipped_blocks": 0,
+                    "scanned_blocks": 1,
                     "rows_available": 6,
                     "rows_scanned": 2,
                     "rows_matched": 1,
                     "columns_read": ["close", "volume"],
                     "column_count": 2,
                     "pruning_rate": 2 / 3,
+                    "block_pruning_rate": 0.0,
                 },
             )
 
@@ -128,12 +140,16 @@ class QueryExecutionTests(unittest.TestCase):
                     "total_chunks": 3,
                     "skipped_chunks": 0,
                     "scanned_chunks": 3,
+                    "total_blocks": 3,
+                    "skipped_blocks": 0,
+                    "scanned_blocks": 3,
                     "rows_available": 6,
                     "rows_scanned": 6,
                     "rows_matched": 6,
                     "columns_read": ["symbol"],
                     "column_count": 1,
                     "pruning_rate": 0.0,
+                    "block_pruning_rate": 0.0,
                 },
             )
 
@@ -170,12 +186,48 @@ class QueryExecutionTests(unittest.TestCase):
                     "total_chunks": 3,
                     "skipped_chunks": 2,
                     "scanned_chunks": 1,
+                    "total_blocks": 1,
+                    "skipped_blocks": 0,
+                    "scanned_blocks": 1,
                     "rows_available": 6,
                     "rows_scanned": 2,
                     "rows_matched": 1,
                     "columns_read": ["close", "volume"],
                     "column_count": 2,
                     "pruning_rate": 2 / 3,
+                    "block_pruning_rate": 0.0,
+                },
+            )
+
+    def test_block_index_prunes_blocks_inside_candidate_chunk(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = self._prepare_block_index_table(Path(tmpdir))
+            query_spec = build_query_spec(
+                table="bars",
+                aggregation_tokens=["sum:volume"],
+                filter_tokens=["symbol=AAPL", "close>40"],
+                group_by_tokens=[],
+            )
+
+            result = execute_query(root=root, query_spec=query_spec)
+
+            self.assertEqual(result.rows, [{"sum_volume": 1010}])
+            self.assertEqual(
+                result.metrics.to_dict(),
+                {
+                    "total_chunks": 1,
+                    "skipped_chunks": 0,
+                    "scanned_chunks": 1,
+                    "total_blocks": 3,
+                    "skipped_blocks": 2,
+                    "scanned_blocks": 1,
+                    "rows_available": 6,
+                    "rows_scanned": 2,
+                    "rows_matched": 2,
+                    "columns_read": ["symbol", "close", "volume"],
+                    "column_count": 3,
+                    "pruning_rate": 0.0,
+                    "block_pruning_rate": 2 / 3,
                 },
             )
 
@@ -198,6 +250,33 @@ class QueryExecutionTests(unittest.TestCase):
 
         ingest_csv_to_wal(root=root, table="bars", csv_path=csv_path)
         compact_table(root=root, table="bars", chunk_size=2, layout="symbol_time")
+        return root
+
+    def _prepare_block_index_table(self, tmp_path: Path) -> Path:
+        rows = [
+            self._row("AAPL", 1000, 10.0, 11.0, 9.5, 10.5, 100),
+            self._row("AAPL", 1010, 10.5, 12.0, 10.0, 11.5, 110),
+            self._row("AAPL", 1020, 50.0, 51.0, 49.5, 50.5, 500),
+            self._row("AAPL", 1030, 50.5, 52.0, 50.0, 51.5, 510),
+            self._row("AAPL", 1040, 12.0, 13.0, 11.5, 12.5, 120),
+            self._row("AAPL", 1050, 12.5, 14.0, 12.0, 13.5, 130),
+        ]
+
+        root = tmp_path / ".tickdb"
+        csv_path = tmp_path / "input.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        ingest_csv_to_wal(root=root, table="bars", csv_path=csv_path)
+        compact_table(
+            root=root,
+            table="bars",
+            chunk_size=6,
+            layout="symbol_time",
+            block_size_rows=2,
+        )
         return root
 
     @staticmethod
