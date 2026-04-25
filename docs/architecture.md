@@ -13,9 +13,9 @@ flowchart LR
     E --> G
     G --> H[Column Projection]
     H --> I[mmap-Based Reads]
-    I --> J[Python or Native Scan]
+    I --> J[Python Scan]
     J --> K[Aggregation]
-    K --> L[Result + Execution Metrics]
+    K --> L[Result JSON]
 ```
 
 ## Storage Layers
@@ -125,8 +125,7 @@ flowchart TD
     I --> J[Apply Filters]
     J --> K[Aggregate]
     K --> L[Merge Chunk Results]
-    L --> M[Print Result Table]
-    L --> N[Print Scan Metrics]
+    L --> M[Print Result JSON]
 ```
 
 ## Pruning Rules

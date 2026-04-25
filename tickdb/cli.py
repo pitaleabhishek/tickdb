@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from tickdb.data.generator import generate_csv
+from tickdb.query.executor import execute_query
 from tickdb.query.parser import build_query_spec
 from tickdb.query.planner import build_query_plan
 from tickdb.storage.compact import compact_table
@@ -77,6 +78,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Grouping column; currently only symbol is supported",
     )
 
+    query_parser = subparsers.add_parser(
+        "query", help="Execute an analytical query over compacted chunk storage."
+    )
+    query_parser.add_argument("--table", required=True)
+    query_parser.add_argument("--root", type=Path, default=Path(".tickdb"))
+    query_parser.add_argument(
+        "--agg",
+        action="append",
+        required=True,
+        help="Aggregation token such as count or avg:close",
+    )
+    query_parser.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Filter token such as symbol=AAPL or close>100",
+    )
+    query_parser.add_argument(
+        "--group-by",
+        action="append",
+        default=[],
+        help="Grouping column; currently only symbol is supported",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -128,6 +153,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         query_plan = build_query_plan(root=args.root, query_spec=query_spec)
         print(json.dumps(query_plan.to_dict(), indent=2))
+        return 0
+
+    if args.command == "query":
+        query_spec = build_query_spec(
+            table=args.table,
+            aggregation_tokens=args.agg,
+            filter_tokens=args.filter,
+            group_by_tokens=args.group_by,
+        )
+        query_result = execute_query(root=args.root, query_spec=query_spec)
+        print(json.dumps(query_result.to_dict(), indent=2))
         return 0
 
     raise ValueError(f"unknown command: {args.command}")

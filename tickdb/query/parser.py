@@ -32,6 +32,7 @@ def build_query_spec(
 
     filters = [parse_filter_token(token) for token in (filter_tokens or [])]
     aggregations = [parse_aggregation_token(token) for token in aggregation_tokens]
+    _validate_unique_aggregation_keys(aggregations)
     group_by = _parse_group_by_tokens(group_by_tokens or [])
 
     return QuerySpec(
@@ -105,3 +106,12 @@ def _parse_group_by_tokens(tokens: list[str]) -> list[str]:
             group_by.append(column)
     return group_by
 
+
+def _validate_unique_aggregation_keys(aggregations: list[AggregationSpec]) -> None:
+    keys: set[str] = set()
+    for aggregation in aggregations:
+        if aggregation.result_key in keys:
+            raise ValueError(
+                f"duplicate aggregation output key: {aggregation.result_key}"
+            )
+        keys.add(aggregation.result_key)

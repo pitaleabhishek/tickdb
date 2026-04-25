@@ -33,6 +33,12 @@ class AggregationSpec:
     function: str
     column: str | None
 
+    @property
+    def result_key(self) -> str:
+        if self.function == "count":
+            return "count"
+        return f"{self.function}_{self.column}"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "function": self.function,
@@ -147,3 +153,25 @@ class QueryPlan:
             "selected_chunk_count": len(self.candidate_chunks),
         }
 
+
+@dataclass(frozen=True)
+class QueryResult:
+    table: str
+    filters: list[FilterSpec]
+    aggregations: list[AggregationSpec]
+    group_by: list[str]
+    rows: list[dict[str, Any]]
+    selected_chunk_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "table": self.table,
+            "filters": [filter_spec.to_dict() for filter_spec in self.filters],
+            "aggregations": [
+                aggregation.to_dict() for aggregation in self.aggregations
+            ],
+            "group_by": self.group_by,
+            "rows": self.rows,
+            "selected_chunk_count": self.selected_chunk_count,
+            "result_row_count": len(self.rows),
+        }

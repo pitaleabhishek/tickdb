@@ -36,11 +36,13 @@ Current implementation:
 - Per-chunk metadata and table-level chunk manifest
 - mmap-based readers for fixed-width numeric and timestamp-offset columns
 - query planning over chunk metadata with explicit required-column calculation
+- query execution over compacted chunks with `count/sum/avg/min/max`
+- `group by symbol` execution
 - Project packaging, CLI, and test scaffolding
 
 Planned next:
 
-- query execution, pruning, and aggregation
+- richer execution metrics and pruning reporting
 - native scan kernel benchmarks
 
 ## Project Shape
@@ -97,6 +99,7 @@ Additional design notes live in:
 - [docs/milestone-04-compaction.md](docs/milestone-04-compaction.md)
 - [docs/milestone-06-mmap-readers.md](docs/milestone-06-mmap-readers.md)
 - [docs/milestone-07-query-planning.md](docs/milestone-07-query-planning.md)
+- [docs/milestone-08-query-execution.md](docs/milestone-08-query-execution.md)
 
 ## Quickstart
 
@@ -136,6 +139,24 @@ The resulting storage lives under:
 
 ```text
 .tickdb/tables/bars/
+```
+
+Plan a query without executing it:
+
+```bash
+tickdb query-plan \
+  --table bars \
+  --agg avg:close \
+  --filter symbol=AAPL
+```
+
+Execute a query against compacted storage:
+
+```bash
+tickdb query \
+  --table bars \
+  --agg avg:close \
+  --filter symbol=AAPL
 ```
 
 Run tests:
