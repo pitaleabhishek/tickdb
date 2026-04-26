@@ -1,4 +1,10 @@
-"""Metadata helpers for compacted chunk storage."""
+"""Build and persist the summaries that power TickDB pruning.
+
+TickDB keeps two metadata granularities: chunk summaries decide whether a whole
+chunk might match a query, and block summaries decide which row ranges inside a
+surviving chunk are worth scanning. Both layers are intentionally lossy and are
+always followed by exact row checks during execution.
+"""
 
 from __future__ import annotations
 
@@ -200,6 +206,8 @@ def build_block_index(
     blocks: list[BlockMetadata] = []
     for block_id, row_start in enumerate(range(0, len(symbols), block_size_rows)):
         row_stop = row_start + block_size_rows
+        # Reuse the same summary shape as chunk metadata so pruning logic can
+        # reason about chunks and blocks through one shared interface.
         summary = _build_ohlcv_summary(
             symbols=symbols[row_start:row_stop],
             timestamps=timestamps[row_start:row_stop],
@@ -280,6 +288,8 @@ def _build_ohlcv_summary(
     if not symbols:
         raise ValueError("cannot build metadata for an empty row set")
 
+    # These summaries are intentionally small and lossy: they are only meant to
+    # answer "could this range match?" before exact execution rechecks rows.
     return {
         "row_count": len(symbols),
         "symbols": sorted(set(symbols)),

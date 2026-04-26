@@ -1,0 +1,477 @@
+{
+  "generated_at": "2026-04-25T15:14:15.553983+00:00",
+  "config": {
+    "rows": 1000000,
+    "chunk_size": 10000,
+    "warmup_runs": 1,
+    "measured_runs": 3,
+    "seed": 7,
+    "step_seconds": 60,
+    "start_timestamp": 1704067200,
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "GOOG",
+      "META",
+      "TSLA",
+      "AMD",
+      "AVGO",
+      "SPY"
+    ]
+  },
+  "environment": {
+    "python": "3.14.0",
+    "platform": "macOS-26.3-arm64-arm-64bit-Mach-O"
+  },
+  "cases": [
+    {
+      "name": "full_scan_count",
+      "description": "Full table count baseline with no pruning.",
+      "business_use_case": "Baseline scan cost for table-wide health checks and sanity counts.",
+      "aggregation_tokens": [
+        "count"
+      ],
+      "filter_tokens": [],
+      "group_by_tokens": [],
+      "layouts": {
+        "time": {
+          "table": "bars",
+          "filters": [],
+          "aggregations": [
+            {
+              "function": "count",
+              "column": null
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "count": 1000000
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 0,
+            "scanned_chunks": 100,
+            "rows_available": 1000000,
+            "rows_scanned": 1000000,
+            "rows_matched": 1000000,
+            "columns_read": [],
+            "column_count": 0,
+            "pruning_rate": 0.0
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              519.201,
+              486.034,
+              483.199
+            ],
+            "median": 486.034,
+            "min": 483.199,
+            "max": 519.201
+          }
+        },
+        "symbol_time": {
+          "table": "bars",
+          "filters": [],
+          "aggregations": [
+            {
+              "function": "count",
+              "column": null
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "count": 1000000
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 0,
+            "scanned_chunks": 100,
+            "rows_available": 1000000,
+            "rows_scanned": 1000000,
+            "rows_matched": 1000000,
+            "columns_read": [],
+            "column_count": 0,
+            "pruning_rate": 0.0
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              485.816,
+              485.135,
+              518.155
+            ],
+            "median": 485.816,
+            "min": 485.135,
+            "max": 518.155
+          }
+        }
+      }
+    },
+    {
+      "name": "time_window_avg_close",
+      "description": "Average close over a narrow mid-stream time window.",
+      "business_use_case": "Measure market state over a recent window without targeting a symbol.",
+      "aggregation_tokens": [
+        "avg:close"
+      ],
+      "filter_tokens": [
+        "timestamp>=1731067173",
+        "timestamp<=1731667172"
+      ],
+      "group_by_tokens": [],
+      "layouts": {
+        "time": {
+          "table": "bars",
+          "filters": [
+            {
+              "column": "timestamp",
+              "operator": ">=",
+              "value": 1731067173
+            },
+            {
+              "column": "timestamp",
+              "operator": "<=",
+              "value": 1731667172
+            }
+          ],
+          "aggregations": [
+            {
+              "function": "avg",
+              "column": "close"
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "avg_close": 207.85405806000077
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 99,
+            "scanned_chunks": 1,
+            "rows_available": 1000000,
+            "rows_scanned": 10000,
+            "rows_matched": 10000,
+            "columns_read": [
+              "timestamp",
+              "close"
+            ],
+            "column_count": 2,
+            "pruning_rate": 0.99
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              11.851,
+              11.711,
+              11.46
+            ],
+            "median": 11.711,
+            "min": 11.46,
+            "max": 11.851
+          }
+        },
+        "symbol_time": {
+          "table": "bars",
+          "filters": [
+            {
+              "column": "timestamp",
+              "operator": ">=",
+              "value": 1731067173
+            },
+            {
+              "column": "timestamp",
+              "operator": "<=",
+              "value": 1731667172
+            }
+          ],
+          "aggregations": [
+            {
+              "function": "avg",
+              "column": "close"
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "avg_close": 207.8540580600002
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 90,
+            "scanned_chunks": 10,
+            "rows_available": 1000000,
+            "rows_scanned": 100000,
+            "rows_matched": 10000,
+            "columns_read": [
+              "timestamp",
+              "close"
+            ],
+            "column_count": 2,
+            "pruning_rate": 0.9
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              68.608,
+              68.414,
+              68.031
+            ],
+            "median": 68.414,
+            "min": 68.031,
+            "max": 68.608
+          }
+        }
+      }
+    },
+    {
+      "name": "symbol_volume_sum",
+      "description": "Volume sum for a single symbol across the full dataset.",
+      "business_use_case": "Evaluate single-name liquidity without constraining the time range.",
+      "aggregation_tokens": [
+        "sum:volume"
+      ],
+      "filter_tokens": [
+        "symbol=NVDA"
+      ],
+      "group_by_tokens": [],
+      "layouts": {
+        "time": {
+          "table": "bars",
+          "filters": [
+            {
+              "column": "symbol",
+              "operator": "=",
+              "value": "NVDA"
+            }
+          ],
+          "aggregations": [
+            {
+              "function": "sum",
+              "column": "volume"
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "sum_volume": 252710224171
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 0,
+            "scanned_chunks": 100,
+            "rows_available": 1000000,
+            "rows_scanned": 1000000,
+            "rows_matched": 100000,
+            "columns_read": [
+              "symbol",
+              "volume"
+            ],
+            "column_count": 2,
+            "pruning_rate": 0.0
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              587.365,
+              546.881,
+              557.618
+            ],
+            "median": 557.618,
+            "min": 546.881,
+            "max": 587.365
+          }
+        },
+        "symbol_time": {
+          "table": "bars",
+          "filters": [
+            {
+              "column": "symbol",
+              "operator": "=",
+              "value": "NVDA"
+            }
+          ],
+          "aggregations": [
+            {
+              "function": "sum",
+              "column": "volume"
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "sum_volume": 252710224171
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 90,
+            "scanned_chunks": 10,
+            "rows_available": 1000000,
+            "rows_scanned": 100000,
+            "rows_matched": 100000,
+            "columns_read": [
+              "symbol",
+              "volume"
+            ],
+            "column_count": 2,
+            "pruning_rate": 0.9
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              80.655,
+              118.896,
+              94.456
+            ],
+            "median": 94.456,
+            "min": 80.655,
+            "max": 118.896
+          }
+        }
+      }
+    },
+    {
+      "name": "symbol_time_avg_close",
+      "description": "Average close for one symbol inside a wider time window.",
+      "business_use_case": "Typical market-data query for one name during a targeted period.",
+      "aggregation_tokens": [
+        "avg:close"
+      ],
+      "filter_tokens": [
+        "symbol=NVDA",
+        "timestamp>=1728067176",
+        "timestamp<=1731067173"
+      ],
+      "group_by_tokens": [],
+      "layouts": {
+        "time": {
+          "table": "bars",
+          "filters": [
+            {
+              "column": "symbol",
+              "operator": "=",
+              "value": "NVDA"
+            },
+            {
+              "column": "timestamp",
+              "operator": ">=",
+              "value": 1728067176
+            },
+            {
+              "column": "timestamp",
+              "operator": "<=",
+              "value": 1731067173
+            }
+          ],
+          "aggregations": [
+            {
+              "function": "avg",
+              "column": "close"
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "avg_close": 115.04243452000038
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 95,
+            "scanned_chunks": 5,
+            "rows_available": 1000000,
+            "rows_scanned": 50000,
+            "rows_matched": 5000,
+            "columns_read": [
+              "symbol",
+              "timestamp",
+              "close"
+            ],
+            "column_count": 3,
+            "pruning_rate": 0.95
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              34.312,
+              34.666,
+              34.122
+            ],
+            "median": 34.312,
+            "min": 34.122,
+            "max": 34.666
+          }
+        },
+        "symbol_time": {
+          "table": "bars",
+          "filters": [
+            {
+              "column": "symbol",
+              "operator": "=",
+              "value": "NVDA"
+            },
+            {
+              "column": "timestamp",
+              "operator": ">=",
+              "value": 1728067176
+            },
+            {
+              "column": "timestamp",
+              "operator": "<=",
+              "value": 1731067173
+            }
+          ],
+          "aggregations": [
+            {
+              "function": "avg",
+              "column": "close"
+            }
+          ],
+          "group_by": [],
+          "rows": [
+            {
+              "avg_close": 115.04243452000038
+            }
+          ],
+          "metrics": {
+            "total_chunks": 100,
+            "skipped_chunks": 99,
+            "scanned_chunks": 1,
+            "rows_available": 1000000,
+            "rows_scanned": 10000,
+            "rows_matched": 5000,
+            "columns_read": [
+              "symbol",
+              "timestamp",
+              "close"
+            ],
+            "column_count": 3,
+            "pruning_rate": 0.99
+          },
+          "result_row_count": 1,
+          "runtime_ms": {
+            "runs": [
+              11.75,
+              11.623,
+              11.477
+            ],
+            "median": 11.623,
+            "min": 11.477,
+            "max": 11.75
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,4 +1,10 @@
-"""WAL-to-columnar compaction."""
+"""Rewrite WAL rows into TickDB's compacted columnar layout.
+
+Compaction is the boundary between the write-optimized WAL and the read-side
+storage engine. This module loads row-oriented WAL data, sorts it into a chosen
+physical layout, writes per-column chunk files, and emits both chunk metadata
+and intra-chunk block metadata for later pruning.
+"""
 
 from __future__ import annotations
 
@@ -113,6 +119,8 @@ def _ensure_compaction_inputs(paths: TablePaths) -> None:
 
 
 def _ensure_compaction_outputs(paths: TablePaths) -> None:
+    # Compaction is conservative for now: it refuses to overwrite existing
+    # read-side storage instead of trying to merge or replace it in place.
     if paths.chunks_metadata_path.exists():
         raise FileExistsError(
             f"chunk manifest already exists for table {paths.table!r}: {paths.chunks_metadata_path}"
@@ -150,6 +158,8 @@ def _load_wal_rows(paths: TablePaths) -> list[BarRow]:
 
 
 def _sort_rows(rows: Sequence[BarRow], layout: str) -> list[BarRow]:
+    # Layout choice is purely a physical ordering decision; query correctness
+    # stays the same, but pruning power later can change dramatically.
     if layout == LAYOUT_TIME:
         return sorted(rows, key=lambda row: (row.timestamp, row.symbol))
     if layout == LAYOUT_SYMBOL_TIME:
@@ -207,6 +217,8 @@ def _write_chunk(
         volumes=volumes,
     )
     write_chunk_metadata(chunk_dir / "meta.json", metadata)
+    # The block index is a second pruning layer inside the chunk: the chunk
+    # survives first, then execution can still skip non-matching row ranges.
     block_index = build_block_index(
         layout=layout,
         block_size_rows=block_size_rows,
