@@ -114,7 +114,11 @@ measured on the pure-Python execution path:
 
 This is the clearest storage story in the repo. Physical layout plus chunk metadata removes most of the work first, and block metadata removes a second large fraction from the surviving scan.
 
-### Native Scan
+At that point, the bottleneck changes. The problem is no longer "how do we skip more data?" but "how fast can we evaluate predicates over the rows that still must be examined?" For this query, the working set has already been reduced from `1,000,000` rows to `60,000`, then to `28,192`. The native C scan kernel sits on top of that reduced working set and accelerates the remaining numeric predicate loop without changing planning or pruning decisions.
+
+### Native Scan on the Reduced Working Set
+
+Pruning reduces how many rows must be examined. Native scan reduces the cost of examining the rows that remain.
 
 | Query | Layout | Python ms | Native ms | Speedup |
 | --- | --- | ---: | ---: | --- |
