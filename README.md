@@ -84,51 +84,20 @@ Result + execution metrics
 
 These are the headline committed results on the `1,000,000`-row benchmark dataset.
 
-For readability, benchmark workloads are shown below in SQL-like form. The actual CLI surface is flag-based, for example `tickdb query --agg ... --filter ...`, but the logical queries are easier to compare in this form.
+The benchmark story is sequential: first layout changes how much data can be skipped, then chunk and block metadata reduce the working set, and only after that does the native C kernel speed up the last remaining numeric predicate loop.
 
-### Layout Baseline
-
-| Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
-| --- | ---: | ---: | --- | --- |
-| `SELECT COUNT(*) FROM OHLCV_table` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
-
-This baseline shows exactly what physical layout is buying. When no pruning is possible, the layouts are effectively identical. Once the predicate is selective, the winner is the layout that clusters the filtered dimension.
-
-### Three-Stage Pruning
-
-For:
-
-```text
-sum(volume) where symbol = NVDA and close > 150
+```mermaid
+xychart-beta
+    title "Threshold Query Progression: SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150"
+    x-axis ["Full Scan", "Chunk", "Chunk+Block", "Chunk+Block+Native"]
+    y-axis "Median ms" 0 --> 650
+    bar [626.259, 45.222, 25.133, 19.027]
 ```
 
-measured on the pure-Python execution path:
-
-| Stage | Physical Setup | Median ms | Rows Scanned |
-| --- | --- | ---: | ---: |
-| Full scan | `time` layout | `626.259` | `1,000,000` |
-| Chunk pruning | `symbol_time` layout, coarse blocks | `45.222` | `60,000` |
-| Chunk + block pruning | `symbol_time` layout, 1024-row blocks | `25.133` | `28,192` |
-
-This is the clearest storage story in the repo. Physical layout plus chunk metadata removes most of the work first, and block metadata removes a second large fraction from the surviving scan.
-
-At that point, the bottleneck changes. The problem is no longer "how do we skip more data?" but "how fast can we evaluate predicates over the rows that still must be examined?" For this query, the working set has already been reduced from `1,000,000` rows to `60,000`, then to `28,192`. The native C scan kernel sits on top of that reduced working set and accelerates the remaining numeric predicate loop without changing planning or pruning decisions.
-
-### Native Scan on the Reduced Working Set
-
-Pruning reduces how many rows must be examined. Native scan reduces the cost of examining the rows that remain.
-
-| Query | Layout | Python ms | Native ms | Speedup |
-| --- | --- | ---: | ---: | --- |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `7.66% faster` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `19.89% faster` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
-
-The native kernel does not change planning or pruning. It only replaces the hottest remaining numeric predicate loop once metadata has already reduced the working set.
+- `time` wins narrow global time-window queries because timestamp ordering keeps chunk ranges tight: `11.711 ms` vs `68.414 ms` for `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`.
+- `symbol_time` wins single-symbol scans because all rows for one symbol are co-located: `94.456 ms` vs `557.618 ms` for `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'`.
+- On `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150`, the working set falls from `1,000,000` rows to `60,000`, then to `28,192`, as pruning gets more granular.
+- On that same threshold query, native scan lowers median runtime again from `25.133 ms` to `19.027 ms` once pruning has already minimized the scan volume.
 
 ## Storage Layout
 
@@ -253,7 +222,7 @@ Examples:
 - a chunk with `close_max = 99.5` can be skipped for `close > 100`
 - a chunk without `NVDA` in its symbol set can be skipped for `symbol = NVDA`
 
-This follows the same broad approach as DuckDB’s automatic zonemaps and Moerkotte’s *Small Materialized Aggregates* ([DuckDB zonemaps](https://duckdb.org/docs/lts/guides/performance/indexing.html), [Moerkotte 1998](https://www.vldb.org/conf/1998/p476.pdf)).
+This follows the same broad approach as DuckDB’s automatic zonemaps: store lightweight min/max summaries at write time, then use them to skip work before any column data is scanned ([DuckDB zonemaps](https://duckdb.org/docs/lts/guides/performance/indexing.html)).
 
 ### Stage 2 — Block-Level Page Index
 
@@ -384,15 +353,10 @@ This table proves that the native kernel is doing the right kind of work. It doe
 
 TickDB implements simplified versions of established ideas in a focused OHLCV context rather than claiming novelty.
 
-- Chunk-level zone maps: DuckDB zonemaps and Moerkotte’s *Small Materialized Aggregates*  
-  https://duckdb.org/docs/lts/guides/performance/indexing.html  
-  https://www.vldb.org/conf/1998/p476.pdf
+- Chunk-level zone maps: DuckDB zonemaps  
+  https://duckdb.org/docs/lts/guides/performance/indexing.html
 - Block-level pruning: Parquet page index  
   https://parquet.apache.org/docs/file-format/pageindex/
-- Physical layout and pruning power: C-Store  
-  https://people.csail.mit.edu/edmond/research/cstore/cstore.pdf
-- Vectorized execution direction: MonetDB/X100  
-  https://ir.cwi.nl/pub/16497
 - Time-sorted layout justification: QuestDB designated timestamp  
   https://questdb.com/docs/concept/designated-timestamp/
 - Lossy summary plus executor recheck: PostgreSQL BRIN  
