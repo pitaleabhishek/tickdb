@@ -2,6 +2,12 @@
 
 This directory contains three benchmark harnesses and their saved outputs.
 
+## Start Here
+
+If you want the committed benchmark story on one screen, start with:
+
+- [`results/README.md`](results/README.md)
+
 ## What Each Benchmark Measures
 
 | Script | Question it answers |
@@ -53,7 +59,7 @@ benchmarks/
 
 ## How To Read The Results
 
-Start here:
+Then drill down into the individual reports:
 
 1. `results/layout/1m-rows.md`
 2. `results/block-pruning/1m-rows.md`
