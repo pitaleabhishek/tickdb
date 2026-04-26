@@ -11,6 +11,7 @@ build/
 .venv/
 .tickdb/
 .tickdb_demo/
+.tickdb_block_demo/
 .internal/
 /AGENTS.md
 data/*.csv

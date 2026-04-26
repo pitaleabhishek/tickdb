@@ -159,7 +159,7 @@ That keeps the implementation narrow enough to go deep on storage and query beha
 
 ### 3. Two Explicit Physical Layouts
 
-TickDB exposes `time` and `symbol_time` as first-class compaction modes because the evaluator can then see the layout tradeoff directly in benchmark numbers. This is not meant as a product feature. It is meant as an empirical demonstration that row order changes pruning power.
+TickDB exposes `time` and `symbol_time` as first-class compaction modes so that we can then see the layout tradeoff directly in benchmark numbers. This is meant as a demonstration of how row order can change pruning power.
 
 ### 4. Metadata Over Traditional Indexes
 
@@ -171,7 +171,7 @@ The project does not try to move the whole executor into C. Only block-local num
 
 ### 6. Execution Metrics Are First-Class
 
-Every query returns not just result rows but also cost-facing metrics:
+Every query returns result rows and also cost-facing metrics:
 
 - total/scanned/skipped chunks
 - total/scanned/skipped blocks
@@ -180,7 +180,7 @@ Every query returns not just result rows but also cost-facing metrics:
 - pruning rates
 - native-scan usage
 
-That makes each design decision measurable instead of anecdotal.
+That makes each design decision measurable.
 
 ## Encoding Layer
 
@@ -235,7 +235,7 @@ This follows the same design intent as the Parquet page index: once a coarse uni
 
 For sorted columns like `timestamp` inside a well-ordered chunk, block metadata is also structured so later work can use binary-search-style block location. TickDB does not implement that optimization yet, but the storage format was chosen so it is valid.
 
-### Why Chunk Pruning and Block Pruning Both Matter
+### We use Chunk Pruning and Block Pruning Both
 
 Chunk pruning and block pruning solve different problems:
 
@@ -244,7 +244,7 @@ Chunk pruning and block pruning solve different problems:
 
 They are complementary, not redundant. Together they reduce scan work to the minimum possible without maintaining a traditional secondary index.
 
-### Why Not Use a Traditional Index?
+### No Use of a Traditional Index
 
 For append-only high-throughput OHLCV ingestion, index maintenance is the wrong trade. B-tree-style indexes add write amplification and per-row maintenance cost. Zone maps and block summaries are computed once during compaction, cost very little to maintain, and still eliminate most irrelevant scan work. That is why analytical engines such as DuckDB, ClickHouse, and time-series engines centered on partition pruning lean heavily on min/max metadata instead of OLTP-style indexes.
 
@@ -305,7 +305,7 @@ Python still owns:
 - exact row recheck
 - aggregation
 
-The native boundary is intentionally narrow: only block-local numeric predicates are pushed down. This mirrors the BRIN model: metadata says “maybe,” the executor evaluates the surviving rows exactly, and the higher-level engine still controls the rest of execution ([PostgreSQL BRIN](https://www.postgresql.org/docs/17/brin.html)).
+The native boundary is intentionally narrow: only block-local numeric predicates are pushed down. Metadata first narrows the candidate set, then execution evaluates the surviving rows exactly, while the higher-level engine still controls planning and aggregation.
 
 ### Actual Native Scan Numbers
 
@@ -316,7 +316,7 @@ The native boundary is intentionally narrow: only block-local numeric predicates
 | `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `1,000,000` | `19.89% faster` |
 | `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `28,192` | `26.27% faster` |
 
-These numbers show exactly where the C path matters. When pruning has already reduced the surviving scan to about a thousand values, the gain is small. When the surviving numeric loop is still large, the native path produces the visible `20–45%` speedups in the committed benchmarks.
+When pruning has already reduced the surviving scan to about a thousand values, the gain is small. When the surviving numeric loop is still large, the native path produces the visible `20–45%` speedups in the committed benchmarks.
 
 ## Benchmark Results
 
@@ -362,8 +362,6 @@ TickDB implements simplified versions of established ideas in a focused OHLCV co
   https://parquet.apache.org/docs/file-format/pageindex/
 - Time-sorted layout justification: QuestDB designated timestamp  
   https://questdb.com/docs/concept/designated-timestamp/
-- Lossy summary plus executor recheck: PostgreSQL BRIN  
-  https://www.postgresql.org/docs/17/brin.html
 
 ## Production Considerations
 
