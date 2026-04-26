@@ -44,13 +44,14 @@ flowchart TD
     C --> E[Chunk Metadata]
     C --> F[Block Index]
     E --> G[Chunk-Level Pruning]
-    F --> H[Block-Level Pruning]
-    D --> I[mmap Column Reads]
-    G --> I
+    G --> H[Surviving Chunks]
+    F --> I[Block-Level Pruning]
     H --> I
-    I --> J[Native C Scan Kernel]
-    J --> K[Python Aggregation]
-    K --> L[Result + Execution Metrics]
+    D --> J[mmap Column Reads]
+    I --> J
+    J --> K[Native C Scan Kernel]
+    K --> L[Python Aggregation]
+    L --> M[Result + Execution Metrics]
 ```
 
 The write path and read path are intentionally split. Incoming rows land in a row-based WAL first because append-only logging is simple and stable. Read-optimized storage is built later by compaction, which sorts rows into a chosen physical layout, writes encoded column files, and emits metadata summaries that queries can use to avoid unnecessary scan work. That separation is the core architectural move in the project.
@@ -68,7 +69,7 @@ Encoded column chunks (two physical layouts)
         ↓
 Chunk-level zone map pruning
         ↓
-Block-level page index pruning
+Block-level page index pruning within surviving chunks
         ↓
 mmap-based column reads
         ↓
