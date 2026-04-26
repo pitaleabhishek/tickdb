@@ -102,6 +102,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Grouping column; currently only symbol is supported",
     )
+    query_parser.add_argument(
+        "--disable-native-scan",
+        action="store_true",
+        help="Force the executor to use the pure-Python row filter path.",
+    )
 
     return parser.parse_args(argv)
 
@@ -164,7 +169,11 @@ def main(argv: list[str] | None = None) -> int:
             filter_tokens=args.filter,
             group_by_tokens=args.group_by,
         )
-        query_result = execute_query(root=args.root, query_spec=query_spec)
+        query_result = execute_query(
+            root=args.root,
+            query_spec=query_spec,
+            use_native_scan=not args.disable_native_scan,
+        )
         print(json.dumps(query_result.to_dict(), indent=2))
         return 0
 

@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tickdb.native import load_native_scan_library
 from tickdb.query.executor import execute_query
 from tickdb.query.parser import build_query_spec
 from tickdb.storage.compact import compact_table
@@ -28,7 +29,11 @@ class QueryExecutionTests(unittest.TestCase):
                 group_by_tokens=[],
             )
 
-            result = execute_query(root=root, query_spec=query_spec)
+            result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=False,
+            )
 
             self.assertEqual(result.rows, [{"count": 6}])
             self.assertEqual(
@@ -47,6 +52,8 @@ class QueryExecutionTests(unittest.TestCase):
                     "column_count": 0,
                     "pruning_rate": 0.0,
                     "block_pruning_rate": 0.0,
+                    "native_filter_used": False,
+                    "native_rows_evaluated": 0,
                 },
             )
 
@@ -60,7 +67,11 @@ class QueryExecutionTests(unittest.TestCase):
                 group_by_tokens=[],
             )
 
-            result = execute_query(root=root, query_spec=query_spec)
+            result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=False,
+            )
 
             self.assertEqual(result.rows, [{"avg_close": 11.0}])
             self.assertEqual(
@@ -79,6 +90,8 @@ class QueryExecutionTests(unittest.TestCase):
                     "column_count": 2,
                     "pruning_rate": 2 / 3,
                     "block_pruning_rate": 0.0,
+                    "native_filter_used": False,
+                    "native_rows_evaluated": 0,
                 },
             )
 
@@ -92,7 +105,11 @@ class QueryExecutionTests(unittest.TestCase):
                 group_by_tokens=[],
             )
 
-            result = execute_query(root=root, query_spec=query_spec)
+            result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=False,
+            )
 
             self.assertEqual(result.rows, [{"sum_volume": 320}])
             self.assertEqual(
@@ -111,6 +128,8 @@ class QueryExecutionTests(unittest.TestCase):
                     "column_count": 2,
                     "pruning_rate": 2 / 3,
                     "block_pruning_rate": 0.0,
+                    "native_filter_used": False,
+                    "native_rows_evaluated": 0,
                 },
             )
 
@@ -124,7 +143,11 @@ class QueryExecutionTests(unittest.TestCase):
                 group_by_tokens=["symbol"],
             )
 
-            result = execute_query(root=root, query_spec=query_spec)
+            result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=False,
+            )
 
             self.assertEqual(
                 result.rows,
@@ -150,6 +173,8 @@ class QueryExecutionTests(unittest.TestCase):
                     "column_count": 1,
                     "pruning_rate": 0.0,
                     "block_pruning_rate": 0.0,
+                    "native_filter_used": False,
+                    "native_rows_evaluated": 0,
                 },
             )
 
@@ -170,6 +195,7 @@ class QueryExecutionTests(unittest.TestCase):
                     "sum:volume",
                     "--filter",
                     "close>31",
+                    "--disable-native-scan",
                 ],
                 cwd=REPO_ROOT,
                 check=True,
@@ -196,6 +222,8 @@ class QueryExecutionTests(unittest.TestCase):
                     "column_count": 2,
                     "pruning_rate": 2 / 3,
                     "block_pruning_rate": 0.0,
+                    "native_filter_used": False,
+                    "native_rows_evaluated": 0,
                 },
             )
 
@@ -209,7 +237,11 @@ class QueryExecutionTests(unittest.TestCase):
                 group_by_tokens=[],
             )
 
-            result = execute_query(root=root, query_spec=query_spec)
+            result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=False,
+            )
 
             self.assertEqual(result.rows, [{"sum_volume": 1010}])
             self.assertEqual(
@@ -228,8 +260,41 @@ class QueryExecutionTests(unittest.TestCase):
                     "column_count": 3,
                     "pruning_rate": 0.0,
                     "block_pruning_rate": 2 / 3,
+                    "native_filter_used": False,
+                    "native_rows_evaluated": 0,
                 },
             )
+
+    def test_native_scan_matches_python_path_when_library_is_available(self) -> None:
+        if load_native_scan_library() is None:
+            self.skipTest("native scan library unavailable")
+
+        with TemporaryDirectory() as tmpdir:
+            root = self._prepare_block_index_table(Path(tmpdir))
+            query_spec = build_query_spec(
+                table="bars",
+                aggregation_tokens=["sum:volume"],
+                filter_tokens=["symbol=AAPL", "close>40"],
+                group_by_tokens=[],
+            )
+
+            python_result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=False,
+            )
+            native_result = execute_query(
+                root=root,
+                query_spec=query_spec,
+                use_native_scan=True,
+            )
+
+            self.assertEqual(native_result.rows, python_result.rows)
+            self.assertEqual(native_result.metrics.total_chunks, python_result.metrics.total_chunks)
+            self.assertEqual(native_result.metrics.rows_scanned, python_result.metrics.rows_scanned)
+            self.assertEqual(native_result.metrics.rows_matched, python_result.metrics.rows_matched)
+            self.assertTrue(native_result.metrics.native_filter_used)
+            self.assertEqual(native_result.metrics.native_rows_evaluated, 2)
 
     def _prepare_table(self, tmp_path: Path) -> Path:
         rows = [

@@ -39,12 +39,12 @@ Current implementation:
 - query planning over chunk metadata with explicit required-column calculation
 - query execution over compacted chunks with `count/sum/avg/min/max`
 - `group by symbol` execution
+- native C scan kernel for eligible numeric block-local filters with Python fallback
 - structured chunk-level and block-level pruning metrics in query output
 - Project packaging, CLI, and test scaffolding
 
 Planned next:
 
-- native scan kernel
 - benchmark comparisons for Python vs native scan
 - final README/demo polish
 
@@ -106,6 +106,7 @@ Additional design notes live in:
 - [docs/milestone-08-query-execution.md](docs/milestone-08-query-execution.md)
 - [docs/milestone-09-pruning-metrics.md](docs/milestone-09-pruning-metrics.md)
 - [docs/milestone-10-block-index.md](docs/milestone-10-block-index.md)
+- [docs/milestone-11-native-scan.md](docs/milestone-11-native-scan.md)
 
 ## Quickstart
 
@@ -166,7 +167,17 @@ tickdb query \
   --filter symbol=AAPL
 ```
 
-The query result includes both final rows and a nested `metrics` object for chunk-level and block-level pruning plus scan cost.
+Force the pure-Python filter path for comparison:
+
+```bash
+tickdb query \
+  --table bars \
+  --agg avg:close \
+  --filter symbol=AAPL \
+  --disable-native-scan
+```
+
+The query result includes both final rows and a nested `metrics` object for chunk-level and block-level pruning plus native-scan usage.
 
 Run tests:
 

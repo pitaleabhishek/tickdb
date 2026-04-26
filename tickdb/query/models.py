@@ -168,6 +168,8 @@ class QueryMetrics:
     rows_scanned: int
     rows_matched: int
     columns_read: list[str]
+    native_filter_used: bool
+    native_rows_evaluated: int
 
     @property
     def column_count(self) -> int:
@@ -200,6 +202,8 @@ class QueryMetrics:
             "column_count": self.column_count,
             "pruning_rate": self.pruning_rate,
             "block_pruning_rate": self.block_pruning_rate,
+            "native_filter_used": self.native_filter_used,
+            "native_rows_evaluated": self.native_rows_evaluated,
         }
 
 
