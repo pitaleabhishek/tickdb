@@ -1,73 +1,130 @@
 # TickDB
 
-TickDB is a focused analytical database for OHLCV market data. It is built mostly in Python, with a small C scan kernel for the hottest numeric filter loop.
+TickDB is a purpose-built analytical database for OHLCV market data, implemented from scratch in Python with a small C scan kernel. It demonstrates the core internals behind analytical storage engines — WAL ingestion, chunked columnar storage, workload-aware pruning at two granularities, encoding, mmap-based reads, and native scan execution — in a focused, benchmarkable system.
 
-The project is intentionally narrow. It does not try to be a general SQL engine or a production time-series system. The goal is to make physical layout, metadata pruning, and scan-path tradeoffs explicit and measurable on market-data workloads.
+## Index
 
-## What It Does
-
-TickDB takes OHLCV rows through a full read/write pipeline:
-
-1. append rows to an immutable WAL
-2. compact WAL rows into chunked columnar files
-3. plan queries from chunk metadata
-4. prune chunks and intra-chunk blocks
-5. read only required columns
-6. execute aggregates with an optional native C numeric filter path
-
-The fixed schema is:
-
-- `symbol`
-- `timestamp`
-- `open`
-- `high`
-- `low`
-- `close`
-- `volume`
-
-## Why This Project
-
-The assignment asked for a non-trivial system built end to end. TickDB was designed to show depth in the parts of an analytical engine that actually change cost:
-
-- physical storage layout
-- column projection
-- metadata-driven pruning
-- block-level skipping
-- native acceleration for a hot loop
-- benchmark design and measurement
-
-That makes the repository useful as both a working system and a systems-oriented engineering artifact.
+- [Architecture](#architecture)
+- [Why This Project](#why-this-project)
+- [Benchmark Highlights](#benchmark-highlights)
+- [Storage Layout](#storage-layout)
+- [Design Decisions](#design-decisions)
+- [Encoding Layer](#encoding-layer)
+- [Two-Stage Pruning](#two-stage-pruning)
+- [Native C Scan Kernel](#native-c-scan-kernel)
+- [Benchmark Results](#benchmark-results)
+- [Design Inspirations](#design-inspirations)
+- [Production Considerations](#production-considerations)
+- [Quickstart](#quickstart)
+- [Success Criteria](#success-criteria)
+- [Non-Goals](#non-goals)
+- [Future Work](#future-work)
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    CSV[CSV / Synthetic OHLCV] --> INGEST[Ingest]
-    INGEST --> WAL[Row-Oriented WAL]
-    WAL --> COMPACT[Compaction]
-    COMPACT --> CHUNKS[Chunked Column Files]
-    COMPACT --> CHMETA[Chunk Metadata]
-    COMPACT --> BLMETA[Block Index]
-
-    QUERY[Query CLI] --> PLAN[Query Planner]
-    PLAN --> MANIFEST[chunks.json]
-    MANIFEST --> CANDIDATES[Candidate Chunks]
-    CANDIDATES --> EXEC[Executor]
-    CHMETA --> EXEC
-    BLMETA --> EXEC
-    CHUNKS --> READERS[mmap Readers]
-    READERS --> EXEC
-    EXEC --> NATIVE[Optional Native C Scan]
-    NATIVE --> AGG[Aggregation]
-    EXEC --> AGG
-    AGG --> RESULT[Result JSON + Metrics]
+flowchart TD
+    A[CSV / Synthetic OHLCV Data] --> B[Row-Based WAL Append]
+    B --> C[WAL-to-Columnar Compaction]
+    C --> D[Encoded Column Chunks]
+    C --> E[Chunk Metadata]
+    C --> F[Block Index]
+    E --> G[Chunk-Level Pruning]
+    F --> H[Block-Level Pruning]
+    D --> I[mmap Column Reads]
+    G --> I
+    H --> I
+    I --> J[Native C Scan Kernel]
+    J --> K[Python Aggregation]
+    K --> L[Result + Execution Metrics]
 ```
 
-The write side stays simple and append-friendly. The read side is where the system gets interesting: physical layout, chunk metadata, block metadata, and native filtering all work together to reduce the amount of data that must actually be scanned.
+The write path and read path are intentionally split. Incoming rows land in a row-based WAL first because append-only logging is simple and stable. Read-optimized storage is built later by compaction, which sorts rows into a chosen physical layout, writes encoded column files, and emits metadata summaries that queries can use to avoid unnecessary scan work. That separation is the core architectural move in the project.
+
+At a high level, the data flow is:
+
+```text
+CSV / Synthetic OHLCV Data
+        ↓
+Row-based WAL append
+        ↓
+WAL-to-columnar compaction
+        ↓
+Encoded column chunks (two physical layouts)
+        ↓
+Chunk-level zone map pruning
+        ↓
+Block-level page index pruning
+        ↓
+mmap-based column reads
+        ↓
+Native C scan kernel (numeric predicates)
+        ↓
+Python aggregation
+        ↓
+Result + execution metrics
+```
+
+## Why This Project
+
+Analytical storage and query execution are central to market-data infrastructure. Most downstream workloads over OHLCV data are read-heavy, aggregation-heavy, and latency-sensitive. The common query shapes are not arbitrary:
+
+- symbol-bounded
+- time-bounded
+- threshold-driven, such as `close > X` or `volume > Y`
+- aggregation-heavy, such as `sum`, `avg`, `min`, and `max`
+
+Those patterns reward workload-aware storage design. Storage order, metadata granularity, and scan strategy all matter because they determine how much data has to be touched before the engine can return an answer.
+
+TickDB is not trying to compete with QuestDB or DuckDB as a production system. It is a focused OHLCV analytics engine that makes storage layout and pruning tradeoffs explicit, measurable, and benchmarkable.
+
+## Benchmark Highlights
+
+These are the headline committed results on the `1,000,000`-row benchmark dataset.
+
+### Layout Baseline
+
+| Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
+| --- | ---: | ---: | --- | --- |
+| `full_scan_count` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
+| `time_window_avg_close` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
+| `symbol_volume_sum` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
+| `symbol_time_avg_close` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
+
+This baseline shows exactly what physical layout is buying. When no pruning is possible, the layouts are effectively identical. Once the predicate is selective, the winner is the layout that clusters the filtered dimension.
+
+### Three-Stage Pruning
+
+For:
+
+```text
+sum(volume) where symbol = NVDA and close > 150
+```
+
+measured on the pure-Python execution path:
+
+| Stage | Physical Setup | Median ms | Rows Scanned |
+| --- | --- | ---: | ---: |
+| Full scan | `time` layout | `626.259` | `1,000,000` |
+| Chunk pruning | `symbol_time` layout, coarse blocks | `45.222` | `60,000` |
+| Chunk + block pruning | `symbol_time` layout, 1024-row blocks | `25.133` | `28,192` |
+
+This is the clearest storage story in the repo. Physical layout plus chunk metadata removes most of the work first, and block metadata removes a second large fraction from the surviving scan.
+
+### Native Scan
+
+| Query | Layout | Python ms | Native ms | Speedup |
+| --- | --- | ---: | ---: | --- |
+| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `7.66% faster` |
+| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
+| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `19.89% faster` |
+| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
+
+The native kernel does not change planning or pruning. It only replaces the hottest remaining numeric predicate loop once metadata has already reduced the working set.
 
 ## Storage Layout
 
-TickDB stores compacted data under a per-table directory:
+Compacted data lives under a per-table directory:
 
 ```text
 .tickdb/
@@ -93,91 +150,255 @@ TickDB stores compacted data under a per-table directory:
           volume.i64
 ```
 
-Key storage ideas:
-
-- `symbol` is dictionary-encoded
-- `timestamp` is stored as `base + offsets`
-- numeric columns are fixed-width binary
-- `meta.json` summarizes each chunk
-- `block_index.json` summarizes row ranges inside a chunk
-
-Chunk metadata answers:
-
-> could this chunk possibly match?
-
-Block metadata answers:
-
-> inside a surviving chunk, which row ranges are still worth scanning?
-
-## Why Two Physical Layouts?
-
 TickDB supports two physical layouts at compaction time:
 
-- `time`: sort rows by `(timestamp, symbol)`
-- `symbol_time`: sort rows by `(symbol, timestamp)`
+- `time` layout: rows sorted by `(timestamp, symbol)`. Best for time-range queries across all symbols. Chunks have tight timestamp ranges, which enables strong chunk pruning on time predicates.
+- `symbol_time` layout: rows sorted by `(symbol, timestamp)`. Best for single-symbol queries. All rows for a given symbol are co-located, which enables strong chunk and block pruning on symbol-plus-threshold predicates.
 
-This is a physical storage choice, not a logical correctness choice. The same query result should come back from either layout. What changes is:
+In production systems, this tradeoff is usually resolved differently: time-based partitioning at the macro level, then additional ordering within each partition based on the dominant access pattern. QuestDB is a strong time-first example because its designated timestamp drives ordering, partition pruning, and interval scans ([QuestDB designated timestamp docs](https://questdb.com/docs/concept/designated-timestamp/)). TickDB makes both layouts explicit and benchmarkable to demonstrate the tradeoff empirically.
 
-- which rows land in the same chunk
-- which symbols appear together
-- timestamp ranges per chunk
-- how much metadata pruning is possible
-- how many rows the executor actually scans
+## Design Decisions
 
-TickDB does **not** dynamically choose a layout at query time. A compacted table has one physical layout. For benchmarks, the same logical dataset is materialized twice:
+### 1. WAL First, Columnar Later
 
-- once in `time`
-- once in `symbol_time`
+Incoming rows do not go straight into columnar storage. They first land in a row-based WAL because append-only logging is simple and stable. Columnar storage wants sorted rows, encodings, chunk boundaries, and metadata summaries; doing all of that on every append would complicate ingestion for little benefit.
 
-That isolates the effect of row ordering on scan cost.
+### 2. Fixed OHLCV Schema
 
-This matters for OHLCV workloads because the common query shapes are usually:
+TickDB is not a general schema engine. It is designed around:
 
-- narrow time windows
-- one or a few symbols
-- symbol plus time
-- threshold predicates like `close > X` or `volume > Y`
+- `symbol`
+- `timestamp`
+- `open`
+- `high`
+- `low`
+- `close`
+- `volume`
 
-Those patterns react strongly to physical ordering.
+That keeps the implementation narrow enough to go deep on storage and query behavior instead of spending time on generic type systems or SQL surface area.
 
-## Query Flow
+### 3. Two Explicit Physical Layouts
 
-At a high level, a query goes through these stages:
+TickDB exposes `time` and `symbol_time` as first-class compaction modes because the evaluator can then see the layout tradeoff directly in benchmark numbers. This is not meant as a product feature. It is meant as an empirical demonstration that row order changes pruning power.
 
-1. parse CLI query input into a structured query spec
-2. load `metadata/chunks.json`
-3. prune whole chunks using chunk metadata
-4. open `block_index.json` for surviving chunks
-5. prune blocks inside those chunks
-6. read only the required column slices
-7. optionally push one numeric predicate into the native C scan kernel
-8. recheck full filter truth in Python
-9. aggregate matching rows
-10. return result rows plus execution metrics
+### 4. Metadata Over Traditional Indexes
 
-Those metrics include:
+Chunk summaries and block summaries are computed once at write time and then reused by every read. That matches append-oriented analytical workloads much better than maintaining a secondary index on every write.
 
-- chunk counts
-- block counts
+### 5. Native Boundary Stays Narrow
+
+The project does not try to move the whole executor into C. Only block-local numeric predicates are pushed down. Planning, metadata reasoning, fallback behavior, row recheck, and aggregation stay in Python.
+
+### 6. Execution Metrics Are First-Class
+
+Every query returns not just result rows but also cost-facing metrics:
+
+- total/scanned/skipped chunks
+- total/scanned/skipped blocks
 - rows scanned
+- rows matched
 - pruning rates
 - native-scan usage
 
-## Performance Techniques
+That makes each design decision measurable instead of anecdotal.
 
-TickDB’s performance story is intentionally explicit:
+## Encoding Layer
 
-- **Column projection**: only required columns are read for a query
-- **Chunk pruning**: chunk summaries eliminate irrelevant chunks early
-- **Block pruning**: block summaries eliminate irrelevant row ranges inside surviving chunks
-- **mmap readers**: fixed-width columns are read through memory-mapped files
-- **Native scan kernel**: the hottest remaining numeric filter loop can run in C
+TickDB uses three simple encodings.
 
-The C path is intentionally narrow. It does not own the whole executor. It only evaluates an eligible numeric predicate over a block-local numeric buffer and returns a one-byte-per-row mask. Planning, fallback behavior, and correctness rechecks stay in Python.
+### Dictionary Encoding on `symbol`
+
+Repeated strings like `AAPL`, `MSFT`, and `NVDA` are mapped to integer ids. A chunk might store:
+
+```text
+dictionary = ["AAPL", "MSFT", "NVDA"]
+ids        = [0, 0, 1, 2, 2, 2]
+```
+
+This reduces repeated string storage and makes symbol filters cheaper because execution can work with integer ids and small symbol sets instead of repeated variable-length strings.
+
+### Delta Encoding on `timestamp`
+
+TickDB stores one base timestamp plus `int64` offsets:
+
+```text
+base    = 1704067200
+offsets = [0, 60, 120, 180]
+```
+
+This works naturally for ordered time-series data because adjacent timestamps are close together. The design is inspired by Gorilla’s treatment of timestamp structure, although TickDB currently implements only base-plus-offset storage rather than Gorilla’s full delta-of-delta compression ([Gorilla, VLDB 2015](https://dblp.org/rec/journals/pvldb/PelkonenFCHMTV15)).
+
+### Fixed-Width Binary for Numerics
+
+`open`, `high`, `low`, and `close` are stored as `float64`. `volume` is stored as `int64`. Fixed-width binary enables direct offset math for mmap reads: row `i` lives at byte offset `i * 8`. That is what makes the mmap reader and native scan kernel simple.
+
+## Two-Stage Pruning
+
+This is the central storage-engine idea in TickDB.
+
+### Stage 1 — Chunk-Level Zone Maps
+
+Each chunk stores min/max metadata for every numeric column plus the set of symbols in the chunk. Before reading any column data, the planner checks whether the chunk can possibly match the query.
+
+Examples:
+
+- a chunk with `close_max = 99.5` can be skipped for `close > 100`
+- a chunk without `NVDA` in its symbol set can be skipped for `symbol = NVDA`
+
+This follows the same broad approach as DuckDB’s automatic zonemaps and Moerkotte’s *Small Materialized Aggregates* ([DuckDB zonemaps](https://duckdb.org/docs/lts/guides/performance/indexing.html), [Moerkotte 1998](https://www.vldb.org/conf/1998/p476.pdf)).
+
+### Stage 2 — Block-Level Page Index
+
+Each chunk is further divided into blocks of 1024 rows. Every block stores its own min/max metadata in `block_index.json`. After chunk pruning selects the surviving chunks, execution prunes blocks inside those chunks before reading row data.
+
+This follows the same design intent as the Parquet page index: once a coarse unit survives, a second metadata layer can still skip large parts of the remaining scan ([Parquet page index](https://parquet.apache.org/docs/file-format/pageindex/)).
+
+For sorted columns like `timestamp` inside a well-ordered chunk, block metadata is also structured so later work can use binary-search-style block location. TickDB does not implement that optimization yet, but the storage format was chosen so it is valid.
+
+### Why Chunk Pruning and Block Pruning Both Matter
+
+Chunk pruning and block pruning solve different problems:
+
+- chunk pruning eliminates irrelevant chunks before any chunk-local I/O
+- block pruning eliminates irrelevant row ranges inside surviving chunks
+
+They are complementary, not redundant. Together they reduce scan work to the minimum possible without maintaining a traditional secondary index.
+
+### Why Not Use a Traditional Index?
+
+For append-only high-throughput OHLCV ingestion, index maintenance is the wrong trade. B-tree-style indexes add write amplification and per-row maintenance cost. Zone maps and block summaries are computed once during compaction, cost very little to maintain, and still eliminate most irrelevant scan work. That is why analytical engines such as DuckDB, ClickHouse, and time-series engines centered on partition pruning lean heavily on min/max metadata instead of OLTP-style indexes.
+
+### Actual Pruning Numbers
+
+#### Threshold Query: Full Scan vs Chunk Pruning vs Chunk + Block Pruning
+
+For:
+
+```text
+sum(volume) where symbol = NVDA and close > 150
+```
+
+measured on the pure-Python execution path:
+
+| Stage | Physical Setup | Median ms | Rows Scanned | Interpretation |
+| --- | --- | ---: | ---: | --- |
+| Full scan | `time` layout | `626.259` | `1,000,000` | this layout offers no useful pruning for this query shape |
+| Chunk pruning | `symbol_time` layout, coarse blocks | `45.222` | `60,000` | chunk metadata removes `94%` of chunks |
+| Chunk + block pruning | `symbol_time` layout, 1024-row blocks | `25.133` | `28,192` | block metadata removes `53.3%` of rows that survived chunk pruning |
+
+The numbers show two separate effects. First, symbol clustering plus chunk metadata collapses a million-row scan to sixty thousand rows. Second, the block index cuts the surviving scan from sixty thousand rows to 28,192 rows. The full path goes from `626.259 ms` to `25.133 ms` without a traditional secondary index.
+
+#### Narrow-Window Query: Chunk Pruning vs Chunk + Block Pruning
+
+| Query | Layout | Chunk-Only Rows | Chunk + Block Rows | Median ms |
+| --- | --- | ---: | ---: | ---: |
+| `narrow_time_window_avg_close` | `time` | `10,000` | `1,024` | `9.294 -> 2.040` |
+| `narrow_time_window_avg_close` | `symbol_time` | `100,000` | `10,240` | `70.509 -> 9.710` |
+| `narrow_symbol_time_avg_close` | `time` | `10,000` | `1,024` | `7.726 -> 1.855` |
+| `narrow_symbol_time_avg_close` | `symbol_time` | `10,000` | `1,024` | `10.247 -> 1.918` |
+
+These are the `~90%` row-reduction cases: `10,000 -> 1,024` and `100,000 -> 10,240`. They show where the block index is strongest: once the candidate chunks are correct, the remaining work can still be cut sharply by pruning row ranges inside those chunks.
+
+## Native C Scan Kernel
+
+After two stages of metadata pruning, the remaining hot work is evaluating numeric predicates over surviving block-local numeric arrays. At that point, Python’s per-row overhead starts to matter: type handling, object lifetimes, interpreter dispatch, and repeated numeric comparisons.
+
+The native kernel removes that overhead. It takes:
+
+- a raw fixed-width numeric buffer
+- a threshold or bounds
+- an output byte mask
+
+and writes one byte per row:
+
+- `1` if the row matched
+- `0` if the row did not
+
+So for `close > 150` over `[149.2, 151.0, 148.5, 152.3]`, the kernel writes `[0, 1, 0, 1]`.
+
+Python still owns:
+
+- planning
+- chunk pruning
+- block pruning
+- fallback behavior
+- exact row recheck
+- aggregation
+
+The native boundary is intentionally narrow: only block-local numeric predicates are pushed down. This mirrors the BRIN model: metadata says “maybe,” the executor evaluates the surviving rows exactly, and the higher-level engine still controls the rest of execution ([PostgreSQL BRIN](https://www.postgresql.org/docs/17/brin.html)).
+
+### Actual Native Scan Numbers
+
+| Query | Layout | Python ms | Native ms | Native Rows Evaluated | Speedup |
+| --- | --- | ---: | ---: | ---: | --- |
+| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `1,024` | `7.66% faster` |
+| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `10,240` | `45.46% faster` |
+| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `1,000,000` | `19.89% faster` |
+| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `28,192` | `26.27% faster` |
+
+These numbers show exactly where the C path matters. When pruning has already reduced the surviving scan to about a thousand values, the gain is small. When the surviving numeric loop is still large, the native path produces the visible `20–45%` speedups in the committed benchmarks.
+
+## Benchmark Results
+
+### Layout Baseline — `time` vs `symbol_time`
+
+| Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
+| --- | ---: | ---: | --- | --- |
+| `full_scan_count` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
+| `time_window_avg_close` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
+| `symbol_volume_sum` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
+| `symbol_time_avg_close` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
+
+This table proves that physical layout matters only when pruning is selective. Full scans are neutral. Once the query shape is selective, the better layout is the one that clusters the dimension the predicate cares about.
+
+### Three-Stage Pruning
+
+| Stage | Median ms | Rows Scanned |
+| --- | ---: | ---: |
+| Full scan (`time`, no useful pruning) | `626.259` | `1,000,000` |
+| Chunk pruning only (`symbol_time`, coarse blocks) | `45.222` | `60,000` |
+| Chunk + block pruning (`symbol_time`, 1024-row blocks) | `25.133` | `28,192` |
+
+This table proves that layout and metadata stack rather than compete. The move to `symbol_time` plus chunk summaries removes most of the work first. The block index then removes a second large fraction from the surviving scan.
+
+### Python vs Native C Scan
+
+| Query | Layout | Python ms | Native ms | Speedup |
+| --- | --- | ---: | ---: | --- |
+| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `7.66% faster` |
+| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
+| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `19.89% faster` |
+| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
+
+This table proves that the native kernel is doing the right kind of work. It does not affect planning or semantics. It only accelerates the hottest remaining predicate loop once metadata has already reduced I/O.
+
+## Design Inspirations
+
+TickDB implements simplified versions of established ideas in a focused OHLCV context rather than claiming novelty.
+
+- Chunk-level zone maps: DuckDB zonemaps and Moerkotte’s *Small Materialized Aggregates*  
+  https://duckdb.org/docs/lts/guides/performance/indexing.html  
+  https://www.vldb.org/conf/1998/p476.pdf
+- Block-level pruning: Parquet page index  
+  https://parquet.apache.org/docs/file-format/pageindex/
+- Timestamp structure: Gorilla paper  
+  https://dblp.org/rec/journals/pvldb/PelkonenFCHMTV15
+- Physical layout and pruning power: C-Store  
+  https://people.csail.mit.edu/edmond/research/cstore/cstore.pdf
+- Vectorized execution direction: MonetDB/X100  
+  https://ir.cwi.nl/pub/16497
+- Time-sorted layout justification: QuestDB designated timestamp  
+  https://questdb.com/docs/concept/designated-timestamp/
+- Lossy summary plus executor recheck: PostgreSQL BRIN  
+  https://www.postgresql.org/docs/17/brin.html
+
+## Production Considerations
+
+In production, it usually would not make sense to expose both layouts as a user choice. A real system would pick physical organization based on the dominant workload. Time-series systems often resolve the tradeoff with time-based directory partitioning at the macro level and additional sorting within partitions. QuestDB is the clearest time-first example because its designated timestamp drives both physical ordering and partition pruning.
+
+In some low-latency systems it is rational to maintain two physical copies of the same logical dataset when storage is cheaper than query latency. TickDB does not present that as a default production strategy. It makes both layouts explicit and benchmarkable so the tradeoff can be demonstrated directly.
 
 ## Quickstart
-
-Install:
 
 ```bash
 python3 -m venv .venv
@@ -194,7 +415,7 @@ tickdb generate \
   --output data/sample_ohlcv.csv
 ```
 
-Ingest into the WAL:
+Ingest a CSV file into the WAL for table `bars`:
 
 ```bash
 tickdb ingest \
@@ -202,7 +423,7 @@ tickdb ingest \
   --file data/sample_ohlcv.csv
 ```
 
-Compact into read-side storage:
+Compact the WAL into chunked columnar storage:
 
 ```bash
 tickdb compact \
@@ -212,7 +433,13 @@ tickdb compact \
   --block-size-rows 1024
 ```
 
-Plan a query:
+The resulting storage lives under:
+
+```text
+.tickdb/tables/bars/
+```
+
+Plan a query without executing it:
 
 ```bash
 tickdb query-plan \
@@ -221,7 +448,7 @@ tickdb query-plan \
   --filter symbol=AAPL
 ```
 
-Execute a query:
+Execute a query against compacted storage:
 
 ```bash
 tickdb query \
@@ -230,7 +457,7 @@ tickdb query \
   --filter symbol=AAPL
 ```
 
-Force the pure-Python filter path:
+Force the pure-Python filter path for comparison:
 
 ```bash
 tickdb query \
@@ -240,87 +467,15 @@ tickdb query \
   --disable-native-scan
 ```
 
+The query result includes both final rows and a nested `metrics` object for chunk-level and block-level pruning plus native-scan usage.
+
 Run tests:
 
 ```bash
 python3 -m unittest discover -s tests
 ```
 
-## Benchmark Methodology
-
-The benchmark harness is built around one principle:
-
-> change one systems variable at a time, keep the logical workload fixed.
-
-Current benchmark setup:
-
-- `1,000,000` rows
-- `10` symbols
-- `10,000` rows per chunk
-- `1,024` rows per fine block
-- `1` warmup run
-- `3` measured runs
-- median runtime reported
-
-Three benchmark comparisons are included:
-
-1. **Layout baseline**
-   - compare `time` vs `symbol_time`
-2. **Block-index comparison**
-   - compare chunk-only scanning vs chunk + block pruning
-3. **Native scan comparison**
-   - compare Python numeric filtering vs native C numeric filtering
-
-Saved harnesses and result artifacts live under [benchmarks/](benchmarks/).
-
-## Benchmark Results
-
-These are the committed `1,000,000`-row results.
-
-### 1. Layout Baseline
-
-This benchmark asks:
-
-> how much does physical row ordering change query cost?
-
-| Query | `time` median ms | `symbol_time` median ms | Winner | Why |
-| --- | ---: | ---: | --- | --- |
-| `full_scan_count` | `486.034` | `485.816` | neutral | no pruning opportunity |
-| `time_window_avg_close` | `11.711` | `68.414` | `time` | time-local chunks cut scan work from `100000` rows to `10000` |
-| `symbol_volume_sum` | `557.618` | `94.456` | `symbol_time` | symbol clustering drops scan work from `1000000` rows to `100000` |
-| `symbol_time_avg_close` | `34.312` | `11.623` | `symbol_time` | symbol locality dominates this symbol-plus-time query |
-
-### 2. Block Index
-
-This benchmark asks:
-
-> once the right chunks are selected, can a finer-grained intra-chunk index reduce the remaining scan?
-
-| Query | Layout | Chunk-Only ms | Block-Index ms | Rows Scanned |
-| --- | --- | ---: | ---: | --- |
-| `narrow_time_window_avg_close` | `time` | `9.294` | `2.040` | `10000 -> 1024` |
-| `narrow_time_window_avg_close` | `symbol_time` | `70.509` | `9.710` | `100000 -> 10240` |
-| `narrow_symbol_time_avg_close` | `time` | `7.726` | `1.855` | `10000 -> 1024` |
-| `narrow_symbol_time_avg_close` | `symbol_time` | `10.247` | `1.918` | `10000 -> 1024` |
-
-The block index is especially effective when chunk pruning is already good but still too coarse.
-
-### 3. Native Scan
-
-This benchmark asks:
-
-> once the right rows are still going to be scanned, does moving the numeric predicate loop into C help?
-
-| Query | Layout | Python ms | Native ms | Native Rows Evaluated | Speedup |
-| --- | --- | ---: | ---: | ---: | --- |
-| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `1024` | `7.66% faster` |
-| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `10240` | `45.46% faster` |
-| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `1000000` | `19.89% faster` |
-| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `28192` | `26.27% faster` |
-
-The native kernel helps modestly when the surviving scan is already tiny, and much more when the remaining numeric filter loop is still large.
-
-## Benchmark Commands
+Benchmark commands:
 
 ```bash
 make benchmark-baseline
@@ -328,73 +483,36 @@ make benchmark-block-index
 make benchmark-native-scan
 ```
 
-Smaller local rerun:
-
-```bash
-python3 benchmarks/run_layout_baselines.py --rows 100000 --force-rebuild
-```
-
-The Markdown summaries are optimized for readability. The raw JSON artifacts keep the fuller metric payload for deeper inspection.
-
 ## Success Criteria
 
-TickDB is successful if it can:
+The project is successful if it can:
 
 - generate or ingest OHLCV data
-- persist rows into a WAL
-- compact WAL data into chunked columnar storage
-- support two physical layouts for controlled comparison
-- prune chunks and intra-chunk blocks
-- read only required columns
-- execute correct aggregates
-- expose execution metrics
-- show measurable layout, block-index, and native-scan effects in benchmarks
+- append rows into a per-table WAL
+- compact WAL data into chunked columnar files
+- read only required columns for a query
+- prune chunks and intra-chunk blocks using symbol, time, and numeric metadata
+- return correct analytical aggregates
+- benchmark full scan vs pruned scan paths
+- benchmark Python filtering vs native filtering
+- run from a fresh clone with clear instructions
 
 ## Non-Goals
 
-TickDB does not try to be:
+TickDB does not aim to support:
 
-- a full SQL database
-- a distributed system
-- a transactional engine
-- a concurrent multi-writer store
-- a production-grade QuestDB or DuckDB replacement
+- Full SQL parsing
+- Joins
+- Distributed execution
+- Concurrent writers
+- Production-grade crash recovery
+- Real-time streaming ingestion
 
-It is a focused OHLCV analytics engine designed to make storage and execution tradeoffs visible.
+## Future Work
 
-## Project Map
-
-- [docs/design.md](docs/design.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/milestone-04-compaction.md](docs/milestone-04-compaction.md)
-- [docs/milestone-06-mmap-readers.md](docs/milestone-06-mmap-readers.md)
-- [docs/milestone-07-query-planning.md](docs/milestone-07-query-planning.md)
-- [docs/milestone-08-query-execution.md](docs/milestone-08-query-execution.md)
-- [docs/milestone-09-pruning-metrics.md](docs/milestone-09-pruning-metrics.md)
-- [docs/milestone-10-block-index.md](docs/milestone-10-block-index.md)
-- [docs/milestone-11-native-scan.md](docs/milestone-11-native-scan.md)
-- [benchmarks/README.md](benchmarks/README.md)
-
-## Current Scope
-
-Implemented:
-
-- synthetic OHLCV generation
-- CSV-to-WAL ingestion
-- WAL-to-columnar compaction
-- dictionary and delta encoding
-- mmap readers
-- query planning
-- query execution
-- chunk pruning
-- block pruning
-- native numeric scan
-- benchmark harnesses and saved results
-
-Deliberately omitted:
-
-- full SQL parser
-- joins
-- concurrency
-- durability beyond the prototype WAL/compaction flow
-- streaming ingestion
+- VWAP as a first-class operator
+- Vectorized batch execution in the MonetDB/X100 model
+- Delta-of-delta + XOR encoding for full Gorilla-style compression
+- Time-based directory partitioning in the QuestDB model
+- Incremental WAL compaction
+- Multi-threaded scan execution
