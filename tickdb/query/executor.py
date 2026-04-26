@@ -1,4 +1,10 @@
-"""Query execution over compacted chunk storage."""
+"""Execute planned queries against compacted chunk storage.
+
+This module is the read-side coordinator for TickDB. Planning and metadata
+pruning happen first, then execution reads only the required columns, applies
+an optional native numeric mask, rechecks full filter truth in Python, and
+finally updates aggregation state.
+"""
 
 from __future__ import annotations
 
@@ -55,6 +61,8 @@ class _NativeFilterPushdown:
 
     def to_native_predicate(self, *, timestamp_base: int = 0) -> NativePredicate:
         if self.column == "timestamp":
+            # The timestamp files store chunk-local offsets, so native timestamp
+            # filters must be translated into that same offset space.
             first_value = int(self.first_value) - timestamp_base
             second_value = (
                 None
@@ -176,6 +184,8 @@ def _iter_matching_rows(
         tracker.record_scanned_chunk()
         block_index = _load_block_index(chunk, chunk_path)
         tracker.record_total_blocks(len(block_index.blocks))
+        # Chunk metadata got us this far; block metadata narrows the exact row
+        # ranges worth opening inside the surviving chunk.
         matching_blocks = [
             block
             for block in block_index.blocks
@@ -203,6 +213,8 @@ def _iter_matching_rows(
                     tracker.record_native_scan(block.row_count)
 
                 for row_index in range(block.row_count):
+                    # A zero byte means the native numeric predicate already
+                    # proved this row cannot match.
                     if native_mask is not None and native_mask[row_index] == 0:
                         continue
                     row_values = {
@@ -276,6 +288,8 @@ def _build_native_block_mask(
     row_count = row_stop - row_start
 
     if native_pushdown.column == "timestamp":
+        # Native timestamp filters run against the encoded offset buffer rather
+        # than reconstructed absolute timestamps.
         raw_bytes = reader.read_range_offset_bytes(row_start, row_stop)
         predicate = native_pushdown.to_native_predicate(timestamp_base=reader.base_value)
         return build_native_mask(raw_bytes, row_count, predicate)
@@ -289,6 +303,8 @@ def _load_block_index(chunk: Any, chunk_path: Path) -> BlockIndex:
     block_index_path = chunk_path / "block_index.json"
     if block_index_path.exists():
         return read_block_index(block_index_path)
+    # Legacy chunks from before Milestone 10 still execute correctly by
+    # treating the whole chunk as one coarse block.
     return BlockIndex(
         layout="legacy",
         block_size_rows=chunk.row_count,
@@ -426,6 +442,8 @@ def _build_native_filter_pushdown_for_column(
 
     equals = next((filter_spec for filter_spec in filters if filter_spec.operator == "="), None)
     if equals is not None:
+        # Equality becomes a closed interval so both Python and C can use the
+        # same "between" predicate shape.
         return _NativeFilterPushdown(
             column=column,
             value_kind=value_kind,

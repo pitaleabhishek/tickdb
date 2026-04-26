@@ -1,3 +1,9 @@
+/*
+ * Tiny native scan kernels for hottest numeric filter loop.
+ *
+ * Each function reads a fixed-width numeric buffer and writes one byte per row
+ * into out_mask: 1 means the row satisfies the predicate, 0 means it does not.
+ */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -54,6 +60,7 @@ void filter_between_double(
     uint8_t include_upper,
     uint8_t *out_mask
 ) {
+    /* Inclusive flags let Python map =, >=, <=, and between onto one kernel. */
     for (size_t i = 0; i < count; i++) {
         uint8_t lower_ok = include_lower ? values[i] >= lower : values[i] > lower;
         uint8_t upper_ok = include_upper ? values[i] <= upper : values[i] < upper;
@@ -114,6 +121,7 @@ void filter_between_int64(
     uint8_t include_upper,
     uint8_t *out_mask
 ) {
+    /* Inclusive flags let Python map =, >=, <=, and between onto one kernel. */
     for (size_t i = 0; i < count; i++) {
         uint8_t lower_ok = include_lower ? values[i] >= lower : values[i] > lower;
         uint8_t upper_ok = include_upper ? values[i] <= upper : values[i] < upper;

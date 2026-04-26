@@ -1,4 +1,9 @@
-"""ctypes wrapper for TickDB's native numeric scan kernel."""
+"""Load and call TickDB's tiny native numeric scan kernel.
+
+The native layer evaluates one numeric predicate
+over a block-local buffer and writes a one-byte-per-row match mask. Planning,
+metadata pruning, aggregation, and correctness rechecks all stay in Python.
+"""
 
 from __future__ import annotations
 
@@ -48,6 +53,8 @@ def load_native_scan_library() -> ctypes.CDLL | None:
     try:
         library = ctypes.CDLL(str(library_path))
     except OSError:
+        # Rebuild once in case the on-disk library exists but is stale or
+        # incompatible with the current platform/compiler output.
         try:
             _build_native_library(library_path)
             library = ctypes.CDLL(str(library_path))
@@ -80,8 +87,11 @@ def build_native_mask(
             f"raw byte length {len(raw_bytes)} does not match expected size {expected_size}"
         )
 
+    # ctypes needs a stable contiguous buffer; copying the block slice here
+    # keeps the Python/C boundary small and predictable.
     input_buffer = (ctypes.c_char * len(raw_bytes)).from_buffer_copy(raw_bytes)
     mask = bytearray(value_count)
+    # The C kernels write 0 for "no match" and 1 for "match" for each row.
     output_buffer = (ctypes.c_uint8 * value_count).from_buffer(mask)
 
     if predicate.value_kind == DOUBLE_KIND:
@@ -293,6 +303,7 @@ def _build_native_library(library_path: Path) -> None:
     library_path.parent.mkdir(parents=True, exist_ok=True)
 
     if sys.platform == "darwin":
+        # macOS wants a dynamic library; Linux uses the usual shared object.
         command = [
             "cc",
             "-O3",

@@ -13,3 +13,4 @@ build/
 .tickdb_demo/
 .internal/
 data/*.csv
+benchmarks/.artifacts/
