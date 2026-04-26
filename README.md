@@ -86,18 +86,12 @@ These are the headline committed results on the `1,000,000`-row benchmark datase
 
 The benchmark story is sequential: first layout changes how much data can be skipped, then chunk and block metadata reduce the working set, and only after that does the native C kernel speed up the last remaining numeric predicate loop.
 
-```mermaid
-xychart-beta
-    title "Threshold Query Progression: SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150"
-    x-axis ["Full Scan", "Chunk", "Chunk+Block", "Chunk+Block+Native"]
-    y-axis "Median ms" 0 --> 650
-    bar [626.259, 45.222, 25.133, 19.027]
-```
-
-- `time` wins narrow global time-window queries because timestamp ordering keeps chunk ranges tight: `11.711 ms` vs `68.414 ms` for `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`.
-- `symbol_time` wins single-symbol scans because all rows for one symbol are co-located: `94.456 ms` vs `557.618 ms` for `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'`.
-- On `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150`, the working set falls from `1,000,000` rows to `60,000`, then to `28,192`, as pruning gets more granular.
-- On that same threshold query, native scan lowers median runtime again from `25.133 ms` to `19.027 ms` once pruning has already minimized the scan volume.
+| Highlight | Result |
+| --- | --- |
+| Narrow time-window query | `time` wins because timestamp ordering keeps chunk ranges tight: `11.711 ms` vs `68.414 ms` for `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`. |
+| Single-symbol query | `symbol_time` wins because all rows for one symbol are co-located: `94.456 ms` vs `557.618 ms` for `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'`. |
+| Three-stage scan reduction | On `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150`, the work falls from `626.259 ms / 1,000,000 rows` to `45.222 ms / 60,000 rows`, then to `25.133 ms / 28,192 rows`. |
+| Native scan on the reduced set | On that same threshold query, native scan lowers median runtime again from `25.133 ms` to `19.027 ms` once pruning has already minimized scan volume. |
 
 ## Storage Layout
 

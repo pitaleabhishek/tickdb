@@ -1,13 +1,16 @@
 PYTHON ?= python3
 PIP ?= pip
 
-.PHONY: install test benchmark-baseline benchmark-block-index benchmark-native-scan clean
+.PHONY: install test demo benchmark-baseline benchmark-block-index benchmark-native-scan clean
 
 install:
 	$(PIP) install -e .
 
 test:
 	$(PYTHON) -m unittest discover -s tests
+
+demo:
+	$(PYTHON) examples/demo.py
 
 benchmark-baseline:
 	$(PYTHON) benchmarks/run_layout_baselines.py
