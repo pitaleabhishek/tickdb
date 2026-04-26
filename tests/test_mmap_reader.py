@@ -31,6 +31,7 @@ class MmapReaderTests(unittest.TestCase):
         with Float64MmapReader(chunk_dir / "close.f64") as reader:
             self.assertEqual(reader.read_range(1, 3), [11.5, 12.5])
             self.assertEqual(reader.read_range(2, 2), [])
+            self.assertEqual(len(reader.read_range_bytes(1, 3)), 16)
 
     def test_int64_reader_reads_full_column(self) -> None:
         chunk_dir = self._prepare_chunk()
@@ -56,6 +57,7 @@ class MmapReaderTests(unittest.TestCase):
             self.assertEqual(reader.row_count, 4)
             self.assertEqual(reader.read_all(), [1000, 1010, 1020, 1030])
             self.assertEqual(reader.read_range(1, 3), [1010, 1020])
+            self.assertEqual(len(reader.read_range_offset_bytes(1, 3)), 16)
 
     def test_reader_rejects_invalid_ranges(self) -> None:
         chunk_dir = self._prepare_chunk()

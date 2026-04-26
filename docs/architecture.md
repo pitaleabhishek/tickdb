@@ -15,9 +15,10 @@ flowchart LR
     H --> J[Block Pruning]
     I --> J
     J --> K[mmap-Based Reads]
-    K --> L[Python Scan]
-    L --> M[Aggregation]
-    M --> N[Result JSON + Metrics]
+    K --> L[Native Scan Mask]
+    L --> M[Python Recheck]
+    M --> N[Aggregation]
+    N --> O[Result JSON + Metrics]
 ```
 
 ## Storage Layers
@@ -129,12 +130,13 @@ flowchart TD
     I -- No --> J[Skip Block]
     I -- Yes --> K[Read Required Columns for Block Range]
     D --> K
-    K --> L[Decode Needed Values]
-    L --> M[Apply Filters]
-    M --> N[Aggregate]
-    N --> O[Collect Scan Metrics]
-    O --> P[Merge Chunk Results]
-    P --> Q[Print Result JSON]
+    K --> L[Build Native Filter Mask]
+    L --> M[Decode Needed Values]
+    M --> N[Python Recheck]
+    N --> O[Aggregate]
+    O --> P[Collect Scan Metrics]
+    P --> Q[Merge Chunk Results]
+    Q --> R[Print Result JSON]
 ```
 
 ## Pruning Rules
@@ -197,6 +199,6 @@ This layout comparison is one of the core analytical stories in the project.
 The system boundary is:
 
 - Python for CLI, storage orchestration, metadata, planning, and aggregation
-- C for hot numeric filter loops
+- C for hot block-local numeric filter loops that write a byte mask
 
 That division keeps the project understandable while still demonstrating low-level performance work where it matters.

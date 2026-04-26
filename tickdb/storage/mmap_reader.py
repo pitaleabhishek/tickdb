@@ -41,6 +41,9 @@ class FixedWidthMmapReader:
     def read_all(self) -> list[int | float]:
         return self.read_range(0, self.row_count)
 
+    def read_all_bytes(self) -> bytes:
+        return self.read_range_bytes(0, self.row_count)
+
     def read_range(self, start: int, stop: int) -> list[int | float]:
         self._ensure_open()
         self._validate_range(start, stop)
@@ -52,6 +55,16 @@ class FixedWidthMmapReader:
         raw = self._mapping[byte_start:byte_stop]
         count = stop - start
         return list(struct.unpack(f"<{count}{self.format_code}", raw))
+
+    def read_range_bytes(self, start: int, stop: int) -> bytes:
+        self._ensure_open()
+        self._validate_range(start, stop)
+        if start == stop:
+            return b""
+
+        byte_start = start * self.value_width
+        byte_stop = stop * self.value_width
+        return self._mapping[byte_start:byte_stop]
 
     def _compute_row_count(self) -> int:
         size = len(self._mapping)
@@ -112,12 +125,22 @@ class TimestampMmapReader:
     def row_count(self) -> int:
         return self._offset_reader.row_count
 
+    @property
+    def base_value(self) -> int:
+        return self.base
+
     def read_all(self) -> list[int]:
         return self.read_range(0, self.row_count)
+
+    def read_all_offset_bytes(self) -> bytes:
+        return self.read_range_offset_bytes(0, self.row_count)
 
     def read_range(self, start: int, stop: int) -> list[int]:
         offsets = self._offset_reader.read_range(start, stop)
         return [self.base + int(offset) for offset in offsets]
+
+    def read_range_offset_bytes(self, start: int, stop: int) -> bytes:
+        return self._offset_reader.read_range_bytes(start, stop)
 
 
 def _read_base_int64(path: Path) -> int:

@@ -230,9 +230,11 @@ Current execution flow:
 5. load block metadata for surviving chunks
 6. prune impossible blocks inside those chunks
 7. read only required columns for surviving block ranges
-8. apply exact row filters
-9. aggregate result rows
-10. print deterministic JSON results plus execution metrics
+8. push down at most one eligible numeric filter into the native scan kernel
+9. use the native byte mask to skip non-matching rows
+10. apply exact row filters in Python
+11. aggregate result rows
+12. print deterministic JSON results plus execution metrics
 
 Current execution scope:
 
@@ -257,6 +259,8 @@ Current execution metrics include:
 - columns read
 - pruning rate
 - block pruning rate
+- native filter used
+- native rows evaluated
 
 ## Native Scan Kernel
 
@@ -273,6 +277,13 @@ Preferred native output:
 - a byte mask indicating which rows matched
 
 That integrates more cleanly with aggregation than returning a list of row indexes.
+
+The native boundary is intentionally narrow:
+
+- chunk pruning stays Python
+- block pruning stays Python
+- aggregation stays Python
+- only the block-local numeric predicate loop moves into C
 
 ## Benchmark Story
 
