@@ -1,4 +1,4 @@
-"""Benchmark coarse chunk-level pruning versus finer-grained block pruning."""
+"""Benchmark chunk-only pruning versus chunk plus block pruning."""
 
 from __future__ import annotations
 
@@ -76,12 +76,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--artifacts-root",
         type=Path,
-        default=Path("benchmarks/.artifacts/block_index_comparison"),
+        default=Path("benchmarks/.artifacts/block-pruning"),
     )
     parser.add_argument(
-        "--results-prefix",
+        "--results-root",
         type=Path,
-        default=Path("benchmarks/results/block_index_comparison"),
+        default=Path("benchmarks/results/block-pruning"),
     )
     parser.add_argument(
         "--force-rebuild",
@@ -140,12 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         "cases": results,
     }
 
-    results_prefix = args.results_prefix.with_name(
-        f"{args.results_prefix.name}_{config.rows}_rows"
-    )
-    results_prefix.parent.mkdir(parents=True, exist_ok=True)
-    json_path = results_prefix.with_suffix(".json")
-    md_path = results_prefix.with_suffix(".md")
+    results_root = args.results_root
+    results_root.mkdir(parents=True, exist_ok=True)
+    json_path = results_root / f"{_row_label(config.rows)}.json"
+    md_path = results_root / f"{_row_label(config.rows)}.md"
     json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     md_path.write_text(_render_markdown_report(payload), encoding="utf-8")
 
@@ -215,6 +213,8 @@ def _run_benchmark_matrix(
         case_results.append(
             {
                 "name": case.name,
+                "title": case.title,
+                "query_sql": case.query_sql,
                 "description": case.description,
                 "business_use_case": case.business_use_case,
                 "aggregation_tokens": case.aggregation_tokens,
@@ -284,7 +284,9 @@ def _render_markdown_report(payload: dict[str, Any]) -> str:
         improvement_lines: list[str] = []
         lines.extend(
             [
-                f"## {case['name']}",
+                f"## {case['title']}",
+                "",
+                f"`{case['query_sql']}`",
                 "",
                 case["description"],
                 "",
@@ -328,7 +330,7 @@ def _render_markdown_report(payload: dict[str, Any]) -> str:
 def _render_console_summary(payload: dict[str, Any]) -> str:
     lines = ["Block index benchmark summary:"]
     for case in payload["cases"]:
-        lines.append(f"- {case['name']}:")
+        lines.append(f"- {case['title']}:")
         for layout in ["time", "symbol_time"]:
             coarse = case["layouts"][layout]["coarse"]
             fine = case["layouts"][layout]["fine"]
@@ -348,6 +350,14 @@ def _fractional_reduction(coarse_value: float, fine_value: float) -> float:
     if coarse_value <= 0:
         return 0.0
     return max(0.0, (coarse_value - fine_value) / coarse_value)
+
+
+def _row_label(rows: int) -> str:
+    if rows == 100_000:
+        return "100k-rows"
+    if rows == 1_000_000:
+        return "1m-rows"
+    return f"{rows}-rows"
 
 
 if __name__ == "__main__":

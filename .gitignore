@@ -12,6 +12,7 @@ build/
 .tickdb/
 .tickdb_demo/
 .internal/
+/AGENTS.md
 data/*.csv
 benchmarks/.artifacts/
 .demo_artifacts/

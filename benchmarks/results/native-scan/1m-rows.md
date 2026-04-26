@@ -11,7 +11,9 @@ Generated: 2026-04-26T14:40:03.366656+00:00
 - warmup_runs: `1`
 - measured_runs: `3`
 
-## narrow_time_window_avg_close
+## Narrow Time-Window Average Close
+
+`SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`
 
 Average close over a narrow timestamp window to exercise the native int64 timestamp predicate path.
 
@@ -27,7 +29,9 @@ Business use case: Measure a short market interval where pruning already narrowe
 - `time` python -> native: median_ms `2.442` -> `2.255` (7.66% faster)
 - `symbol_time` python -> native: median_ms `8.76` -> `4.778` (45.46% faster)
 
-## symbol_close_threshold_sum_volume
+## Single-Symbol Threshold Volume Sum
+
+`SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150`
 
 Volume sum for NVDA above a close threshold to exercise the native float64 price predicate path.
 

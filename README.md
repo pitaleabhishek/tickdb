@@ -461,8 +461,8 @@ make demo
 Benchmark commands:
 
 ```bash
-make benchmark-baseline
-make benchmark-block-index
+make benchmark-layout
+make benchmark-block-pruning
 make benchmark-native-scan
 ```
 

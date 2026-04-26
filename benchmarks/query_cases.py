@@ -23,6 +23,8 @@ class BenchmarkContext:
 @dataclass(frozen=True)
 class BenchmarkCase:
     name: str
+    title: str
+    query_sql: str
     description: str
     business_use_case: str
     aggregation_tokens: list[str]
@@ -40,6 +42,8 @@ def build_benchmark_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
     return [
         BenchmarkCase(
             name="full_scan_count",
+            title="Full Scan Count",
+            query_sql="SELECT COUNT(*) FROM OHLCV_table",
             description="Full table count baseline with no pruning.",
             business_use_case=(
                 "Baseline scan cost for table-wide health checks and sanity counts."
@@ -50,6 +54,11 @@ def build_benchmark_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
         ),
         BenchmarkCase(
             name="time_window_avg_close",
+            title="Narrow Time-Window Average Close",
+            query_sql=(
+                "SELECT AVG(close) FROM OHLCV_table "
+                "WHERE timestamp BETWEEN t1 AND t2"
+            ),
             description="Average close over a narrow mid-stream time window.",
             business_use_case=(
                 "Measure market state over a recent window without targeting a symbol."
@@ -63,6 +72,11 @@ def build_benchmark_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
         ),
         BenchmarkCase(
             name="symbol_volume_sum",
+            title="Single-Symbol Volume Sum",
+            query_sql=(
+                "SELECT SUM(volume) FROM OHLCV_table "
+                "WHERE symbol = 'NVDA'"
+            ),
             description="Volume sum for a single symbol across the full dataset.",
             business_use_case=(
                 "Evaluate single-name liquidity without constraining the time range."
@@ -73,6 +87,11 @@ def build_benchmark_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
         ),
         BenchmarkCase(
             name="symbol_time_avg_close",
+            title="Single-Symbol Windowed Average Close",
+            query_sql=(
+                "SELECT AVG(close) FROM OHLCV_table "
+                "WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2"
+            ),
             description="Average close for one symbol inside a wider time window.",
             business_use_case=(
                 "Typical market-data query for one name during a targeted period."
@@ -101,6 +120,11 @@ def build_block_index_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
     return [
         BenchmarkCase(
             name="narrow_time_window_avg_close",
+            title="Narrow Time-Window Average Close",
+            query_sql=(
+                "SELECT AVG(close) FROM OHLCV_table "
+                "WHERE timestamp BETWEEN t1 AND t2"
+            ),
             description=(
                 "Average close over a narrow time window small enough to fit inside "
                 "one chunk but much smaller than the chunk itself."
@@ -118,6 +142,11 @@ def build_block_index_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
         ),
         BenchmarkCase(
             name="narrow_symbol_time_avg_close",
+            title="Narrow Single-Symbol Windowed Average Close",
+            query_sql=(
+                "SELECT AVG(close) FROM OHLCV_table "
+                "WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2"
+            ),
             description=(
                 "Average close for one symbol inside a very narrow time window."
             ),
@@ -145,6 +174,11 @@ def build_native_scan_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
     return [
         BenchmarkCase(
             name="narrow_time_window_avg_close",
+            title="Narrow Time-Window Average Close",
+            query_sql=(
+                "SELECT AVG(close) FROM OHLCV_table "
+                "WHERE timestamp BETWEEN t1 AND t2"
+            ),
             description=(
                 "Average close over a narrow timestamp window to exercise the "
                 "native int64 timestamp predicate path."
@@ -162,6 +196,11 @@ def build_native_scan_cases(context: BenchmarkContext) -> list[BenchmarkCase]:
         ),
         BenchmarkCase(
             name="symbol_close_threshold_sum_volume",
+            title="Single-Symbol Threshold Volume Sum",
+            query_sql=(
+                "SELECT SUM(volume) FROM OHLCV_table "
+                "WHERE symbol = 'NVDA' AND close > 150"
+            ),
             description=(
                 "Volume sum for NVDA above a close threshold to exercise the "
                 "native float64 price predicate path."
