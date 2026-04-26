@@ -84,6 +84,15 @@ Result + execution metrics
 
 These are the headline committed results on the `1,000,000`-row benchmark dataset.
 
+In these benchmarks, the same logical OHLCV data is compacted twice:
+
+- `time`
+  means rows are sorted by `(timestamp, symbol)`
+- `symbol_time`
+  means rows are sorted by `(symbol, timestamp)`
+
+So the benchmark question is not "which query is faster in the abstract?" It is "how much does physical row order change pruning power and scan cost for the same query?"
+
 The benchmark story is sequential: first layout changes how much data can be skipped, then chunk and block metadata reduce the working set, and only after that does the native C kernel speed up the last remaining numeric predicate loop.
 
 | Highlight | Result |
