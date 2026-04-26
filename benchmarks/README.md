@@ -59,6 +59,15 @@ benchmarks/
 
 ## How To Read The Results
 
+The `results/` subfolders are benchmark categories, not storage layouts:
+
+- `results/layout/`
+  compares `time` vs `symbol_time`
+- `results/block-pruning/`
+  compares chunk-only scanning vs chunk plus block pruning
+- `results/native-scan/`
+  compares the Python scan path vs the native C scan path
+
 Then drill down into the individual reports:
 
 1. `results/layout/1m-rows.md`

@@ -2,6 +2,17 @@
 
 This file is the single-screen view of the committed `1m-rows` benchmark results.
 
+## What The Folders Mean
+
+The subfolders under `benchmarks/results/` are benchmark categories:
+
+- `layout/`
+  means physical-layout comparison only: `time` vs `symbol_time`
+- `block-pruning/`
+  means pruning-granularity comparison: chunk-only vs chunk + block pruning
+- `native-scan/`
+  means execution-path comparison: Python scan vs native C scan
+
 ## 1. Layout Benchmark
 
 | Query | `time` ms | `symbol_time` ms | Winner |
