@@ -364,6 +364,19 @@ In some low-latency systems it is rational to maintain two physical copies of th
 
 ## Quickstart
 
+Fastest fresh-clone path:
+
+```bash
+git clone https://github.com/pitaleabhishek/tickdb.git
+cd tickdb
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+make demo
+```
+
+Manual setup and individual commands:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
