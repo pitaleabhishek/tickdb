@@ -1,11 +1,11 @@
 # TickDB
 
-TickDB is a purpose-built analytical database for OHLCV market data, implemented from scratch in Python with a small C scan kernel. It demonstrates the core internals behind analytical storage engines — WAL ingestion, chunked columnar storage, workload-aware pruning at two granularities, encoding, mmap-based reads, and native scan execution — in a focused, benchmarkable system.
+TickDB is a from-scratch analytical storage engine for OHLCV market data. It implements the core internals behind columnar databases used in market-data infrastructure: WAL ingestion, chunked columnar storage, two physical layouts, two-stage workload-aware pruning, encoding, mmap-based reads, and a native C scan kernel; in a system narrow enough to be fully understood and benchmarked end to end.
 
 ## Index
 
-- [Architecture](#architecture)
 - [Why This Project](#why-this-project)
+- [Architecture](#architecture)
 - [Benchmark Highlights](#benchmark-highlights)
 - [Storage Layout](#storage-layout)
 - [Design Decisions](#design-decisions)
@@ -19,6 +19,20 @@ TickDB is a purpose-built analytical database for OHLCV market data, implemented
 - [Success Criteria](#success-criteria)
 - [Non-Goals](#non-goals)
 - [Future Work](#future-work)
+
+## Why This Project
+
+Market-data analytics is not a generic workload. OHLCV queries are structurally different from OLTP queries: they are read-heavy, aggregation-heavy, and dominated by a small set of recurring shapes:
+
+- symbol-bounded: filter to one or a few tickers
+- time-bounded: range scan over a timestamp window
+- threshold-driven: predicates like `close > X` or `volume > Y`
+- aggregation-heavy, such as `sum`, `avg`, `min`, and `max` over large row sets
+
+Those patterns reward workload-aware storage design in specific ways. Physical row order determines which chunks can be skipped. Metadata granularity determines how much of a surviving chunk still has to be scanned. Scan strategy determines how fast the remaining rows are evaluated. Each of those is a separate, measurable lever.
+
+TickDB is not trying to compete with QuestDB or DuckDB as a production system. It is a focused OHLCV analytics engine that makes storage layout and pruning tradeoffs explicit, measurable, and benchmarkable.
+
 
 ## Architecture
 
@@ -65,31 +79,20 @@ Python aggregation
 Result + execution metrics
 ```
 
-## Why This Project
-
-Analytical storage and query execution are central to market-data infrastructure. Most downstream workloads over OHLCV data are read-heavy, aggregation-heavy, and latency-sensitive. The common query shapes are not arbitrary:
-
-- symbol-bounded
-- time-bounded
-- threshold-driven, such as `close > X` or `volume > Y`
-- aggregation-heavy, such as `sum`, `avg`, `min`, and `max`
-
-Those patterns reward workload-aware storage design. Storage order, metadata granularity, and scan strategy all matter because they determine how much data has to be touched before the engine can return an answer.
-
-TickDB is not trying to compete with QuestDB or DuckDB as a production system. It is a focused OHLCV analytics engine that makes storage layout and pruning tradeoffs explicit, measurable, and benchmarkable.
-
 ## Benchmark Highlights
 
 These are the headline committed results on the `1,000,000`-row benchmark dataset.
+
+For readability, benchmark workloads are shown below in SQL-like form. The actual CLI surface is flag-based, for example `tickdb query --agg ... --filter ...`, but the logical queries are easier to compare in this form.
 
 ### Layout Baseline
 
 | Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
 | --- | ---: | ---: | --- | --- |
-| `full_scan_count` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
-| `time_window_avg_close` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
-| `symbol_volume_sum` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
-| `symbol_time_avg_close` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
+| `SELECT COUNT(*) FROM OHLCV_table` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
 
 This baseline shows exactly what physical layout is buying. When no pruning is possible, the layouts are effectively identical. Once the predicate is selective, the winner is the layout that clusters the filtered dimension.
 
@@ -115,10 +118,10 @@ This is the clearest storage story in the repo. Physical layout plus chunk metad
 
 | Query | Layout | Python ms | Native ms | Speedup |
 | --- | --- | ---: | ---: | --- |
-| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `7.66% faster` |
-| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
-| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `19.89% faster` |
-| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `7.66% faster` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `19.89% faster` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
 
 The native kernel does not change planning or pruning. It only replaces the hottest remaining numeric predicate loop once metadata has already reduced the working set.
 
@@ -129,7 +132,7 @@ Compacted data lives under a per-table directory:
 ```text
 .tickdb/
   tables/
-    bars/
+    OHLCV_table/
       wal/
         000001.jsonl
       metadata/
@@ -217,7 +220,7 @@ ids        = [0, 0, 1, 2, 2, 2]
 
 This reduces repeated string storage and makes symbol filters cheaper because execution can work with integer ids and small symbol sets instead of repeated variable-length strings.
 
-### Delta Encoding on `timestamp`
+### Base + Offset Encoding on `timestamp`
 
 TickDB stores one base timestamp plus `int64` offsets:
 
@@ -226,9 +229,9 @@ base    = 1704067200
 offsets = [0, 60, 120, 180]
 ```
 
-This works naturally for ordered time-series data because adjacent timestamps are close together. The design is inspired by Gorilla’s treatment of timestamp structure, although TickDB currently implements only base-plus-offset storage rather than Gorilla’s full delta-of-delta compression ([Gorilla, VLDB 2015](https://dblp.org/rec/journals/pvldb/PelkonenFCHMTV15)).
+This works naturally for ordered time-series data because adjacent timestamps are close together. TickDB does not implement Gorilla-style delta-of-delta compression; the current implementation is only base-plus-offset storage because it keeps mmap reads and scan logic simple.
 
-### Fixed-Width Binary for Numerics
+### Plain Fixed-Width Binary Encoding for Numerics
 
 `open`, `high`, `low`, and `close` are stored as `float64`. `volume` is stored as `int64`. Fixed-width binary enables direct offset math for mmap reads: row `i` lives at byte offset `i * 8`. That is what makes the mmap reader and native scan kernel simple.
 
@@ -292,10 +295,10 @@ The numbers show two separate effects. First, symbol clustering plus chunk metad
 
 | Query | Layout | Chunk-Only Rows | Chunk + Block Rows | Median ms |
 | --- | --- | ---: | ---: | ---: |
-| `narrow_time_window_avg_close` | `time` | `10,000` | `1,024` | `9.294 -> 2.040` |
-| `narrow_time_window_avg_close` | `symbol_time` | `100,000` | `10,240` | `70.509 -> 9.710` |
-| `narrow_symbol_time_avg_close` | `time` | `10,000` | `1,024` | `7.726 -> 1.855` |
-| `narrow_symbol_time_avg_close` | `symbol_time` | `10,000` | `1,024` | `10.247 -> 1.918` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `10,000` | `1,024` | `9.294 -> 2.040` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `100,000` | `10,240` | `70.509 -> 9.710` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `time` | `10,000` | `1,024` | `7.726 -> 1.855` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `symbol_time` | `10,000` | `1,024` | `10.247 -> 1.918` |
 
 These are the `~90%` row-reduction cases: `10,000 -> 1,024` and `100,000 -> 10,240`. They show where the block index is strongest: once the candidate chunks are correct, the remaining work can still be cut sharply by pruning row ranges inside those chunks.
 
@@ -331,10 +334,10 @@ The native boundary is intentionally narrow: only block-local numeric predicates
 
 | Query | Layout | Python ms | Native ms | Native Rows Evaluated | Speedup |
 | --- | --- | ---: | ---: | ---: | --- |
-| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `1,024` | `7.66% faster` |
-| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `10,240` | `45.46% faster` |
-| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `1,000,000` | `19.89% faster` |
-| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `28,192` | `26.27% faster` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `1,024` | `7.66% faster` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `10,240` | `45.46% faster` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `1,000,000` | `19.89% faster` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `28,192` | `26.27% faster` |
 
 These numbers show exactly where the C path matters. When pruning has already reduced the surviving scan to about a thousand values, the gain is small. When the surviving numeric loop is still large, the native path produces the visible `20–45%` speedups in the committed benchmarks.
 
@@ -344,10 +347,10 @@ These numbers show exactly where the C path matters. When pruning has already re
 
 | Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
 | --- | ---: | ---: | --- | --- |
-| `full_scan_count` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
-| `time_window_avg_close` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
-| `symbol_volume_sum` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
-| `symbol_time_avg_close` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
+| `SELECT COUNT(*) FROM OHLCV_table` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
 
 This table proves that physical layout matters only when pruning is selective. Full scans are neutral. Once the query shape is selective, the better layout is the one that clusters the dimension the predicate cares about.
 
@@ -365,10 +368,10 @@ This table proves that layout and metadata stack rather than compete. The move t
 
 | Query | Layout | Python ms | Native ms | Speedup |
 | --- | --- | ---: | ---: | --- |
-| `narrow_time_window_avg_close` | `time` | `2.442` | `2.255` | `7.66% faster` |
-| `narrow_time_window_avg_close` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
-| `symbol_close_threshold_sum_volume` | `time` | `597.195` | `478.409` | `19.89% faster` |
-| `symbol_close_threshold_sum_volume` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `7.66% faster` |
+| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `19.89% faster` |
+| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
 
 This table proves that the native kernel is doing the right kind of work. It does not affect planning or semantics. It only accelerates the hottest remaining predicate loop once metadata has already reduced I/O.
 
@@ -381,8 +384,6 @@ TickDB implements simplified versions of established ideas in a focused OHLCV co
   https://www.vldb.org/conf/1998/p476.pdf
 - Block-level pruning: Parquet page index  
   https://parquet.apache.org/docs/file-format/pageindex/
-- Timestamp structure: Gorilla paper  
-  https://dblp.org/rec/journals/pvldb/PelkonenFCHMTV15
 - Physical layout and pruning power: C-Store  
   https://people.csail.mit.edu/edmond/research/cstore/cstore.pdf
 - Vectorized execution direction: MonetDB/X100  
@@ -415,11 +416,11 @@ tickdb generate \
   --output data/sample_ohlcv.csv
 ```
 
-Ingest a CSV file into the WAL for table `bars`:
+Ingest a CSV file into the WAL for table `OHLCV_table`:
 
 ```bash
 tickdb ingest \
-  --table bars \
+  --table OHLCV_table \
   --file data/sample_ohlcv.csv
 ```
 
@@ -427,7 +428,7 @@ Compact the WAL into chunked columnar storage:
 
 ```bash
 tickdb compact \
-  --table bars \
+  --table OHLCV_table \
   --chunk-size 10000 \
   --layout time \
   --block-size-rows 1024
@@ -436,14 +437,14 @@ tickdb compact \
 The resulting storage lives under:
 
 ```text
-.tickdb/tables/bars/
+.tickdb/tables/OHLCV_table/
 ```
 
 Plan a query without executing it:
 
 ```bash
 tickdb query-plan \
-  --table bars \
+  --table OHLCV_table \
   --agg avg:close \
   --filter symbol=AAPL
 ```
@@ -452,7 +453,7 @@ Execute a query against compacted storage:
 
 ```bash
 tickdb query \
-  --table bars \
+  --table OHLCV_table \
   --agg avg:close \
   --filter symbol=AAPL
 ```
@@ -461,7 +462,7 @@ Force the pure-Python filter path for comparison:
 
 ```bash
 tickdb query \
-  --table bars \
+  --table OHLCV_table \
   --agg avg:close \
   --filter symbol=AAPL \
   --disable-native-scan
@@ -473,6 +474,12 @@ Run tests:
 
 ```bash
 python3 -m unittest discover -s tests
+```
+
+One-command end-to-end demo:
+
+```bash
+make demo
 ```
 
 Benchmark commands:
