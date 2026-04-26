@@ -1,29 +1,29 @@
 # TickDB Design
 
-## Goal
+This document explains the main design choices behind TickDB.
 
-TickDB is a small analytical database for OHLCV market data. The purpose of the project is to demonstrate the core mechanics behind market-data analytics engines:
+## Project Scope
 
-- write-ahead logging
-- columnar storage
-- column-specific encodings
-- metadata-driven chunk pruning
-- memory-mapped reads
-- native scan execution for numeric filters
+TickDB is a small analytical database for OHLCV market data. It is intentionally narrow:
 
-The target is a serious systems prototype, not a production database.
+- fixed OHLCV schema
+- local filesystem storage
+- append to WAL, then compact into columnar chunks
+- aggregation-heavy reads over compacted storage
+
+The project is meant to make storage and execution tradeoffs explicit, not to be a general SQL database.
 
 ## Design Thesis
 
 TickDB is built around one claim:
 
-> physical layout plus chunk and block metadata can materially reduce market-data query cost.
+> physical layout plus lightweight metadata can materially reduce market-data query cost.
 
-Everything in the project should support that claim with code, tests, and benchmarks.
+Everything else follows from that.
 
 ## Fixed Schema
 
-TickDB is intentionally schema-constrained around OHLCV bars:
+TickDB is constrained to:
 
 - `symbol: string`
 - `timestamp: int64`
@@ -33,305 +33,162 @@ TickDB is intentionally schema-constrained around OHLCV bars:
 - `close: float64`
 - `volume: int64`
 
-That constraint keeps the storage engine simple enough to finish cleanly while still being non-trivial.
+That keeps the engine simple enough to go deep on storage, pruning, and benchmarkability.
 
-## On-Disk Layout
+## WAL First, Columnar Later
 
-TickDB stores data under a local `.tickdb` root.
+Incoming rows do not go straight into columnar storage.
 
-```text
-.tickdb/
-  tables/
-    <table>/
-      wal/
-        000001.jsonl
-      metadata/
-        table.json
-        chunks.json
-      chunks/
-        000000/
-          meta.json
-          block_index.json
-          symbol.dict.json
-          symbol.ids.u32
-          timestamp.base
-          timestamp.offsets.i64
-          open.f64
-          high.f64
-          low.f64
-          close.f64
-          volume.i64
-```
+Why:
 
-This layout matters:
+- WAL append is simple and stable
+- compaction wants sorted rows, chunk boundaries, and metadata
+- doing columnar rewrite work on every append would complicate ingestion
 
-- the WAL is row-oriented and append-friendly
-- compacted chunks are column-oriented and scan-friendly
-- chunk boundaries are explicit, which makes pruning and metrics straightforward
+So the write path is:
 
-## Write Path
+1. normalize rows
+2. append to JSONL WAL
+3. compact later into read-optimized storage
 
-The write path is deliberately simple:
+## Physical Layout Choices
 
-1. read OHLCV rows from CSV or the synthetic generator
-2. validate and normalize row types
-3. append rows to a per-table JSONL WAL
-
-The WAL is not the final analytical storage format. It is the ingestion boundary.
-
-## Compaction Strategy
-
-Compaction reads WAL rows and writes chunked columnar storage.
-
-Planned compaction steps:
-
-1. load WAL rows
-2. sort rows by chosen layout mode
-3. split rows into fixed-size chunks
-4. encode and write each column per chunk
-5. write chunk metadata
-6. update table-level manifest metadata
-
-Initial layout modes:
+TickDB exposes two physical layouts at compaction time:
 
 - `time`
 - `symbol_time`
 
-The `symbol_time` mode is important because it should improve symbol pruning and make optional symbol RLE more effective.
+The reason is not product flexibility. The reason is to make the layout tradeoff measurable.
 
-## Encoding Strategy
+### `time`
 
-TickDB uses simple, explicit encodings rather than clever compression.
+Rows are sorted by `(timestamp, symbol)`.
 
-### Symbol
+Best for:
 
-Primary path:
+- time-window queries across many symbols
 
-- dictionary encoding
+### `symbol_time`
 
-Optional path:
+Rows are sorted by `(symbol, timestamp)`.
 
-- dictionary encoding plus RLE over encoded symbol IDs
+Best for:
 
-RLE is only worth the complexity when rows are symbol-clustered.
+- single-symbol scans
+- symbol plus threshold predicates
 
-### Timestamp
+## Encodings
 
-Use:
+TickDB uses simple encodings that preserve straightforward read logic.
 
-- `base timestamp + int64 offsets`
+### Dictionary Encoding
 
-This preserves a delta-style representation while keeping reads simple and random-access friendly.
+Used for:
 
-### Numeric Columns
+- `symbol`
 
-Use fixed-width binary:
+Example:
 
-- `open/high/low/close`: `float64`
-- `volume`: `int64`
+- dictionary: `["AAPL", "MSFT", "NVDA"]`
+- ids: `[0, 0, 1, 2, 2]`
 
-This makes mmap-based reads and offset calculations simple and predictable.
+### Base + Offset Encoding
 
-## Chunk Metadata
+Used for:
 
-Each chunk will store metadata used for planning and pruning.
+- `timestamp`
 
-Expected fields:
+Example:
 
-- `row_count`
-- `symbols`
-- `timestamp_min`
-- `timestamp_max`
-- `open_min/open_max`
-- `high_min/high_max`
-- `low_min/low_max`
-- `close_min/close_max`
-- `volume_min/volume_max`
+- base: `1704067200`
+- offsets: `[0, 60, 120, 180]`
 
-This is essentially a small set of zone maps plus a symbol set.
+### Fixed-Width Binary
 
-## Intra-Chunk Block Index
+Used for:
 
-Each compacted chunk also stores a `block_index.json` file.
+- `open`
+- `high`
+- `low`
+- `close`
+- `volume`
 
-This is a finer-grained pruning layer inside the chunk itself. Instead of treating a surviving chunk as one indivisible scan unit, TickDB splits the chunk into fixed-size row blocks and stores metadata for each block:
+This keeps `mmap` reads and byte-offset math simple.
 
-- `block_id`
-- `row_start`
-- `row_count`
-- `symbols`
-- `timestamp_min/timestamp_max`
-- `open_min/open_max`
-- `high_min/high_max`
-- `low_min/low_max`
-- `close_min/close_max`
-- `volume_min/volume_max`
+## Two-Stage Pruning
 
-This feature is inspired by Parquet-style page indexes and BRIN-style block summaries, but implemented in TickDB's own storage format.
+TickDB prunes at two granularities.
+
+### Chunk-Level Pruning
+
+Each chunk stores:
+
+- symbol set
+- min/max for every numeric column
+
+This lets the planner skip whole chunks before reading heavy column data.
+
+### Block-Level Pruning
+
+Each surviving chunk is then split into fixed-size blocks, each with its own summaries.
+
+This lets execution skip row ranges inside a chunk that already survived coarse pruning.
 
 The pruning model is hierarchical:
 
-1. chunk metadata decides whether the chunk can match at all
+1. chunk metadata decides whether a chunk can match at all
 2. block metadata decides which row ranges inside that chunk can match
 3. exact row filters still recheck values before aggregation
 
-This keeps pruning correct while reducing unnecessary row scans inside wide surviving chunks.
+## mmap-Based Reads
 
-## Query Model
+Compacted numeric columns are fixed-width binary files. That means row `i` can be read by direct byte offset instead of row decoding through text formats.
 
-TickDB does not need a SQL parser. The query interface will be a small CLI surface that supports:
+This is why the engine can:
 
-- projection
-- filters
-- aggregations
-- `group by symbol`
+- read only required columns
+- read row ranges inside a block
+- hand raw block-local slices to the native scan path
 
-The query interface uses explicit repeated flags rather than SQL text, for example:
+## Native Scan Boundary
 
-```bash
-tickdb query-plan \
-  --table bars \
-  --agg avg:close \
-  --filter symbol=AAPL \
-  --filter close>100
-```
+The native path is intentionally small.
 
-Representative filters:
+What C does:
 
-- `symbol = AAPL`
-- `timestamp between T1 and T2`
-- `close > X`
+- evaluate one eligible numeric predicate over a block-local numeric array
+- write a byte mask for matching rows
 
-Representative aggregations:
+What Python still does:
 
-- `count`
-- `sum`
-- `avg`
-- `min`
-- `max`
+- planning
+- metadata pruning
+- exact filter recheck
+- aggregation
+- metrics
 
-The execution command uses the same grammar:
+This keeps the system understandable while still moving the hottest numeric loop out of Python.
 
-```bash
-tickdb query \
-  --table bars \
-  --agg avg:close \
-  --filter symbol=AAPL
-```
+## Metrics
 
-## Query Execution Plan
+Every executed query returns result rows plus execution metrics, including:
 
-Current execution flow:
-
-1. parse CLI arguments into a structured query
-2. identify required columns
-3. load chunk metadata
-4. prune impossible chunks
-5. load block metadata for surviving chunks
-6. prune impossible blocks inside those chunks
-7. read only required columns for surviving block ranges
-8. push down at most one eligible numeric filter into the native scan kernel
-9. use the native byte mask to skip non-matching rows
-10. apply exact row filters in Python
-11. aggregate result rows
-12. print deterministic JSON results plus execution metrics
-
-Current execution scope:
-
-- `count`
-- `sum`
-- `avg`
-- `min`
-- `max`
-- `group by symbol`
-
-Current execution metrics include:
-
-- total chunks
-- skipped chunks
-- scanned chunks
-- total blocks
-- skipped blocks
-- scanned blocks
-- rows available
+- scanned and skipped chunks
+- scanned and skipped blocks
 - rows scanned
 - rows matched
-- columns read
-- pruning rate
-- block pruning rate
-- native filter used
-- native rows evaluated
+- pruning rates
+- native scan usage
 
-## Native Scan Kernel
+Those metrics are part of the design, not an afterthought. They are what make the storage decisions benchmarkable.
 
-Python will orchestrate the system. C will handle the hottest numeric scan loops.
+## Deliberate Non-Goals
 
-Initial native kernel scope:
+TickDB does not try to provide:
 
-- `>`
-- `<`
-- `between`
-
-Preferred native output:
-
-- a byte mask indicating which rows matched
-
-That integrates more cleanly with aggregation than returning a list of row indexes.
-
-The native boundary is intentionally narrow:
-
-- chunk pruning stays Python
-- block pruning stays Python
-- aggregation stays Python
-- only the block-local numeric predicate loop moves into C
-
-## Benchmark Story
-
-The final repo should benchmark exactly the claims the design makes.
-
-Core comparisons:
-
-1. full scan vs time-only pruning vs symbol-time pruning
-2. projected columns read vs total columns
-3. chunk-only pruning vs chunk-plus-block pruning
-4. Python numeric filtering vs native numeric filtering
-
-The benchmark goal is not absolute speed. The benchmark goal is demonstrating reduced work.
-
-## Testing Strategy
-
-Tests should cover:
-
-- synthetic data generation
-- WAL ingestion and replay
-- encoding and decoding correctness
-- chunk metadata correctness
-- pruning correctness
-- query aggregation correctness
-- fallback behavior when native code is unavailable
-
-## Non-Goals
-
-TickDB intentionally excludes:
-
-- full SQL parsing
-- joins
-- concurrent writers
-- multi-threaded execution
-- distributed storage
-- production-grade recovery
-- object storage
-- JIT or SIMD work
-
-## Documentation Strategy
-
-The repo should tell a coherent story in commit history:
-
-1. scaffold plus baseline docs
-2. ingest and WAL
-3. compaction and storage format
-4. query planning and pruning
-5. native scan path
-6. benchmarks and final polish
-
-That history is almost as important as the final code.
+- a general SQL engine
+- arbitrary schemas
+- transactional semantics beyond append-style WAL ingest
+- advanced query optimization
+- vectorized batch execution
+- multi-threaded scans

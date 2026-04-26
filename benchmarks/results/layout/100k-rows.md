@@ -1,16 +1,18 @@
 # Layout Baseline Benchmark
 
-Generated: 2026-04-25T15:14:15.553983+00:00
+Generated: 2026-04-25T15:13:24.460605+00:00
 
 ## Configuration
 
-- rows: `1000000`
+- rows: `100000`
 - chunk_size: `10000`
 - symbols: `AAPL, MSFT, NVDA, AMZN, GOOG, META, TSLA, AMD, AVGO, SPY`
 - warmup_runs: `1`
 - measured_runs: `3`
 
-## full_scan_count
+## Full Scan Count
+
+`SELECT COUNT(*) FROM OHLCV_table`
 
 Full table count baseline with no pruning.
 
@@ -18,10 +20,12 @@ Business use case: Baseline scan cost for table-wide health checks and sanity co
 
 | Layout | Median ms | Scanned Chunks | Rows Scanned | Pruning Rate |
 | --- | ---: | ---: | ---: | ---: |
-| `time` | `486.034` | `100` | `1000000` | `0.0000` |
-| `symbol_time` | `485.816` | `100` | `1000000` | `0.0000` |
+| `time` | `48.193` | `10` | `100000` | `0.0000` |
+| `symbol_time` | `48.258` | `10` | `100000` | `0.0000` |
 
-## time_window_avg_close
+## Narrow Time-Window Average Close
+
+`SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`
 
 Average close over a narrow mid-stream time window.
 
@@ -29,10 +33,12 @@ Business use case: Measure market state over a recent window without targeting a
 
 | Layout | Median ms | Scanned Chunks | Rows Scanned | Pruning Rate |
 | --- | ---: | ---: | ---: | ---: |
-| `time` | `11.711` | `1` | `10000` | `0.9900` |
-| `symbol_time` | `68.414` | `10` | `100000` | `0.9000` |
+| `time` | `7.0` | `1` | `10000` | `0.9000` |
+| `symbol_time` | `65.462` | `10` | `100000` | `0.0000` |
 
-## symbol_volume_sum
+## Single-Symbol Volume Sum
+
+`SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'`
 
 Volume sum for a single symbol across the full dataset.
 
@@ -40,10 +46,12 @@ Business use case: Evaluate single-name liquidity without constraining the time 
 
 | Layout | Median ms | Scanned Chunks | Rows Scanned | Pruning Rate |
 | --- | ---: | ---: | ---: | ---: |
-| `time` | `557.618` | `100` | `1000000` | `0.0000` |
-| `symbol_time` | `94.456` | `10` | `100000` | `0.9000` |
+| `time` | `53.502` | `10` | `100000` | `0.0000` |
+| `symbol_time` | `8.004` | `1` | `10000` | `0.9000` |
 
-## symbol_time_avg_close
+## Single-Symbol Windowed Average Close
+
+`SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2`
 
 Average close for one symbol inside a wider time window.
 
@@ -51,6 +59,6 @@ Business use case: Typical market-data query for one name during a targeted peri
 
 | Layout | Median ms | Scanned Chunks | Rows Scanned | Pruning Rate |
 | --- | ---: | ---: | ---: | ---: |
-| `time` | `34.312` | `5` | `50000` | `0.9500` |
-| `symbol_time` | `11.623` | `1` | `10000` | `0.9900` |
+| `time` | `6.631` | `1` | `10000` | `0.9000` |
+| `symbol_time` | `8.931` | `1` | `10000` | `0.9000` |
 

@@ -13,7 +13,9 @@ Generated: 2026-04-25T19:40:00.732574+00:00
 
 Coarse mode sets `block_size_rows = chunk_size`, which makes block pruning equivalent to chunk-only scanning.
 
-## narrow_time_window_avg_close
+## Narrow Time-Window Average Close
+
+`SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`
 
 Average close over a narrow time window small enough to fit inside one chunk but much smaller than the chunk itself.
 
@@ -29,7 +31,9 @@ Business use case: Measure a short market interval where chunk pruning alone is 
 - `time` coarse -> fine: rows_scanned `10000` -> `1024` (89.76% reduction), median_ms `9.294` -> `2.04` (78.05% reduction)
 - `symbol_time` coarse -> fine: rows_scanned `100000` -> `10240` (89.76% reduction), median_ms `70.509` -> `9.71` (86.23% reduction)
 
-## narrow_symbol_time_avg_close
+## Narrow Single-Symbol Windowed Average Close
+
+`SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2`
 
 Average close for one symbol inside a very narrow time window.
 

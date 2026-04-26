@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-04-26T14:40:03.366656+00:00",
+  "generated_at": "2026-04-25T19:40:00.588930+00:00",
   "config": {
-    "rows": 1000000,
+    "rows": 100000,
     "chunk_size": 10000,
-    "block_size_rows": 1024,
+    "fine_block_size_rows": 1024,
     "warmup_runs": 1,
-    "measured_runs": 3,
+    "measured_runs": 2,
     "seed": 7,
     "step_seconds": 60,
     "start_timestamp": 1704067200,
@@ -29,30 +29,30 @@
   "cases": [
     {
       "name": "narrow_time_window_avg_close",
-      "description": "Average close over a narrow timestamp window to exercise the native int64 timestamp predicate path.",
-      "business_use_case": "Measure a short market interval where pruning already narrowed the scan and the remaining timestamp comparisons are the hot loop.",
+      "description": "Average close over a narrow time window small enough to fit inside one chunk but much smaller than the chunk itself.",
+      "business_use_case": "Measure a short market interval where chunk pruning alone is too coarse and intra-chunk skipping should reduce scan work.",
       "aggregation_tokens": [
         "avg:close"
       ],
       "filter_tokens": [
-        "timestamp>=1731067173",
-        "timestamp<=1731127172"
+        "timestamp>=1706767173",
+        "timestamp<=1706773172"
       ],
       "group_by_tokens": [],
       "layouts": {
         "time": {
-          "python": {
+          "coarse": {
             "table": "bars",
             "filters": [
               {
                 "column": "timestamp",
                 "operator": ">=",
-                "value": 1731067173
+                "value": 1706767173
               },
               {
                 "column": "timestamp",
                 "operator": "<=",
-                "value": 1731127172
+                "value": 1706773172
               }
             ],
             "aggregations": [
@@ -64,53 +64,50 @@
             "group_by": [],
             "rows": [
               {
-                "avg_close": 209.23700899999992
+                "avg_close": 218.38084300000003
               }
             ],
             "metrics": {
               "total_chunks": 100,
               "skipped_chunks": 99,
               "scanned_chunks": 1,
-              "total_blocks": 10,
-              "skipped_blocks": 9,
+              "total_blocks": 1,
+              "skipped_blocks": 0,
               "scanned_blocks": 1,
               "rows_available": 1000000,
-              "rows_scanned": 1024,
-              "rows_matched": 1000,
+              "rows_scanned": 10000,
+              "rows_matched": 100,
               "columns_read": [
                 "timestamp",
                 "close"
               ],
               "column_count": 2,
               "pruning_rate": 0.99,
-              "block_pruning_rate": 0.9,
-              "native_filter_used": false,
-              "native_rows_evaluated": 0
+              "block_pruning_rate": 0.0
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                2.442,
-                2.44,
-                2.481
+                8.665,
+                7.795
               ],
-              "median": 2.442,
-              "min": 2.44,
-              "max": 2.481
+              "median": 8.23,
+              "min": 7.795,
+              "max": 8.665
             }
           },
-          "native": {
+          "fine": {
             "table": "bars",
             "filters": [
               {
                 "column": "timestamp",
                 "operator": ">=",
-                "value": 1731067173
+                "value": 1706767173
               },
               {
                 "column": "timestamp",
                 "operator": "<=",
-                "value": 1731127172
+                "value": 1706773172
               }
             ],
             "aggregations": [
@@ -122,7 +119,7 @@
             "group_by": [],
             "rows": [
               {
-                "avg_close": 209.23700899999992
+                "avg_close": 218.38084300000003
               }
             ],
             "metrics": {
@@ -134,43 +131,40 @@
               "scanned_blocks": 1,
               "rows_available": 1000000,
               "rows_scanned": 1024,
-              "rows_matched": 1000,
+              "rows_matched": 100,
               "columns_read": [
                 "timestamp",
                 "close"
               ],
               "column_count": 2,
               "pruning_rate": 0.99,
-              "block_pruning_rate": 0.9,
-              "native_filter_used": true,
-              "native_rows_evaluated": 1024
+              "block_pruning_rate": 0.9
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                2.308,
-                2.255,
-                2.251
+                1.607,
+                1.965
               ],
-              "median": 2.255,
-              "min": 2.251,
-              "max": 2.308
+              "median": 1.786,
+              "min": 1.607,
+              "max": 1.965
             }
           }
         },
         "symbol_time": {
-          "python": {
+          "coarse": {
             "table": "bars",
             "filters": [
               {
                 "column": "timestamp",
                 "operator": ">=",
-                "value": 1731067173
+                "value": 1706767173
               },
               {
                 "column": "timestamp",
                 "operator": "<=",
-                "value": 1731127172
+                "value": 1706773172
               }
             ],
             "aggregations": [
@@ -182,53 +176,50 @@
             "group_by": [],
             "rows": [
               {
-                "avg_close": 209.23700899999977
+                "avg_close": 218.38084300000006
               }
             ],
             "metrics": {
               "total_chunks": 100,
               "skipped_chunks": 90,
               "scanned_chunks": 10,
-              "total_blocks": 100,
-              "skipped_blocks": 90,
+              "total_blocks": 10,
+              "skipped_blocks": 0,
               "scanned_blocks": 10,
               "rows_available": 1000000,
-              "rows_scanned": 10240,
-              "rows_matched": 1000,
+              "rows_scanned": 100000,
+              "rows_matched": 100,
               "columns_read": [
                 "timestamp",
                 "close"
               ],
               "column_count": 2,
               "pruning_rate": 0.9,
-              "block_pruning_rate": 0.9,
-              "native_filter_used": false,
-              "native_rows_evaluated": 0
+              "block_pruning_rate": 0.0
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                8.845,
-                8.76,
-                8.51
+                71.807,
+                71.408
               ],
-              "median": 8.76,
-              "min": 8.51,
-              "max": 8.845
+              "median": 71.607,
+              "min": 71.408,
+              "max": 71.807
             }
           },
-          "native": {
+          "fine": {
             "table": "bars",
             "filters": [
               {
                 "column": "timestamp",
                 "operator": ">=",
-                "value": 1731067173
+                "value": 1706767173
               },
               {
                 "column": "timestamp",
                 "operator": "<=",
-                "value": 1731127172
+                "value": 1706773172
               }
             ],
             "aggregations": [
@@ -240,7 +231,7 @@
             "group_by": [],
             "rows": [
               {
-                "avg_close": 209.23700899999977
+                "avg_close": 218.38084300000006
               }
             ],
             "metrics": {
@@ -252,47 +243,47 @@
               "scanned_blocks": 10,
               "rows_available": 1000000,
               "rows_scanned": 10240,
-              "rows_matched": 1000,
+              "rows_matched": 100,
               "columns_read": [
                 "timestamp",
                 "close"
               ],
               "column_count": 2,
               "pruning_rate": 0.9,
-              "block_pruning_rate": 0.9,
-              "native_filter_used": true,
-              "native_rows_evaluated": 10240
+              "block_pruning_rate": 0.9
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                5.045,
-                4.672,
-                4.778
+                10.711,
+                10.461
               ],
-              "median": 4.778,
-              "min": 4.672,
-              "max": 5.045
+              "median": 10.586,
+              "min": 10.461,
+              "max": 10.711
             }
           }
         }
-      }
+      },
+      "title": "Narrow Time-Window Average Close",
+      "query_sql": "SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2"
     },
     {
-      "name": "symbol_close_threshold_sum_volume",
-      "description": "Volume sum for NVDA above a close threshold to exercise the native float64 price predicate path.",
-      "business_use_case": "Typical single-name threshold query where symbol filtering stays in Python but the price predicate is a good native pushdown candidate.",
+      "name": "narrow_symbol_time_avg_close",
+      "description": "Average close for one symbol inside a very narrow time window.",
+      "business_use_case": "Typical single-name OHLCV query where chunk pruning narrows the candidate set and block pruning should reduce the remaining scan.",
       "aggregation_tokens": [
-        "sum:volume"
+        "avg:close"
       ],
       "filter_tokens": [
         "symbol=NVDA",
-        "close>150"
+        "timestamp>=1706467176",
+        "timestamp<=1706473175"
       ],
       "group_by_tokens": [],
       "layouts": {
         "time": {
-          "python": {
+          "coarse": {
             "table": "bars",
             "filters": [
               {
@@ -301,57 +292,59 @@
                 "value": "NVDA"
               },
               {
-                "column": "close",
-                "operator": ">",
-                "value": 150.0
+                "column": "timestamp",
+                "operator": ">=",
+                "value": 1706467176
+              },
+              {
+                "column": "timestamp",
+                "operator": "<=",
+                "value": 1706473175
               }
             ],
             "aggregations": [
               {
-                "function": "sum",
-                "column": "volume"
+                "function": "avg",
+                "column": "close"
               }
             ],
             "group_by": [],
             "rows": [
               {
-                "sum_volume": 40514444212
+                "avg_close": 182.93623000000002
               }
             ],
             "metrics": {
               "total_chunks": 100,
-              "skipped_chunks": 0,
-              "scanned_chunks": 100,
-              "total_blocks": 1000,
+              "skipped_chunks": 99,
+              "scanned_chunks": 1,
+              "total_blocks": 1,
               "skipped_blocks": 0,
-              "scanned_blocks": 1000,
+              "scanned_blocks": 1,
               "rows_available": 1000000,
-              "rows_scanned": 1000000,
-              "rows_matched": 16068,
+              "rows_scanned": 10000,
+              "rows_matched": 10,
               "columns_read": [
                 "symbol",
-                "close",
-                "volume"
+                "timestamp",
+                "close"
               ],
               "column_count": 3,
-              "pruning_rate": 0.0,
-              "block_pruning_rate": 0.0,
-              "native_filter_used": false,
-              "native_rows_evaluated": 0
+              "pruning_rate": 0.99,
+              "block_pruning_rate": 0.0
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                597.195,
-                590.561,
-                612.447
+                7.8,
+                7.726
               ],
-              "median": 597.195,
-              "min": 590.561,
-              "max": 612.447
+              "median": 7.763,
+              "min": 7.726,
+              "max": 7.8
             }
           },
-          "native": {
+          "fine": {
             "table": "bars",
             "filters": [
               {
@@ -360,59 +353,61 @@
                 "value": "NVDA"
               },
               {
-                "column": "close",
-                "operator": ">",
-                "value": 150.0
+                "column": "timestamp",
+                "operator": ">=",
+                "value": 1706467176
+              },
+              {
+                "column": "timestamp",
+                "operator": "<=",
+                "value": 1706473175
               }
             ],
             "aggregations": [
               {
-                "function": "sum",
-                "column": "volume"
+                "function": "avg",
+                "column": "close"
               }
             ],
             "group_by": [],
             "rows": [
               {
-                "sum_volume": 40514444212
+                "avg_close": 182.93623000000002
               }
             ],
             "metrics": {
               "total_chunks": 100,
-              "skipped_chunks": 0,
-              "scanned_chunks": 100,
-              "total_blocks": 1000,
-              "skipped_blocks": 0,
-              "scanned_blocks": 1000,
+              "skipped_chunks": 99,
+              "scanned_chunks": 1,
+              "total_blocks": 10,
+              "skipped_blocks": 9,
+              "scanned_blocks": 1,
               "rows_available": 1000000,
-              "rows_scanned": 1000000,
-              "rows_matched": 16068,
+              "rows_scanned": 1024,
+              "rows_matched": 10,
               "columns_read": [
                 "symbol",
-                "close",
-                "volume"
+                "timestamp",
+                "close"
               ],
               "column_count": 3,
-              "pruning_rate": 0.0,
-              "block_pruning_rate": 0.0,
-              "native_filter_used": true,
-              "native_rows_evaluated": 1000000
+              "pruning_rate": 0.99,
+              "block_pruning_rate": 0.9
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                525.986,
-                457.15,
-                478.409
+                1.742,
+                1.953
               ],
-              "median": 478.409,
-              "min": 457.15,
-              "max": 525.986
+              "median": 1.847,
+              "min": 1.742,
+              "max": 1.953
             }
           }
         },
         "symbol_time": {
-          "python": {
+          "coarse": {
             "table": "bars",
             "filters": [
               {
@@ -421,57 +416,59 @@
                 "value": "NVDA"
               },
               {
-                "column": "close",
-                "operator": ">",
-                "value": 150.0
+                "column": "timestamp",
+                "operator": ">=",
+                "value": 1706467176
+              },
+              {
+                "column": "timestamp",
+                "operator": "<=",
+                "value": 1706473175
               }
             ],
             "aggregations": [
               {
-                "function": "sum",
-                "column": "volume"
+                "function": "avg",
+                "column": "close"
               }
             ],
             "group_by": [],
             "rows": [
               {
-                "sum_volume": 40514444212
+                "avg_close": 182.93623000000002
               }
             ],
             "metrics": {
               "total_chunks": 100,
-              "skipped_chunks": 94,
-              "scanned_chunks": 6,
-              "total_blocks": 60,
-              "skipped_blocks": 32,
-              "scanned_blocks": 28,
+              "skipped_chunks": 99,
+              "scanned_chunks": 1,
+              "total_blocks": 1,
+              "skipped_blocks": 0,
+              "scanned_blocks": 1,
               "rows_available": 1000000,
-              "rows_scanned": 28192,
-              "rows_matched": 16068,
+              "rows_scanned": 10000,
+              "rows_matched": 10,
               "columns_read": [
                 "symbol",
-                "close",
-                "volume"
+                "timestamp",
+                "close"
               ],
               "column_count": 3,
-              "pruning_rate": 0.94,
-              "block_pruning_rate": 0.5333333333333333,
-              "native_filter_used": false,
-              "native_rows_evaluated": 0
+              "pruning_rate": 0.99,
+              "block_pruning_rate": 0.0
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                28.106,
-                25.624,
-                25.808
+                9.828,
+                9.451
               ],
-              "median": 25.808,
-              "min": 25.624,
-              "max": 28.106
+              "median": 9.64,
+              "min": 9.451,
+              "max": 9.828
             }
           },
-          "native": {
+          "fine": {
             "table": "bars",
             "filters": [
               {
@@ -480,58 +477,62 @@
                 "value": "NVDA"
               },
               {
-                "column": "close",
-                "operator": ">",
-                "value": 150.0
+                "column": "timestamp",
+                "operator": ">=",
+                "value": 1706467176
+              },
+              {
+                "column": "timestamp",
+                "operator": "<=",
+                "value": 1706473175
               }
             ],
             "aggregations": [
               {
-                "function": "sum",
-                "column": "volume"
+                "function": "avg",
+                "column": "close"
               }
             ],
             "group_by": [],
             "rows": [
               {
-                "sum_volume": 40514444212
+                "avg_close": 182.93623000000002
               }
             ],
             "metrics": {
               "total_chunks": 100,
-              "skipped_chunks": 94,
-              "scanned_chunks": 6,
-              "total_blocks": 60,
-              "skipped_blocks": 32,
-              "scanned_blocks": 28,
+              "skipped_chunks": 99,
+              "scanned_chunks": 1,
+              "total_blocks": 10,
+              "skipped_blocks": 9,
+              "scanned_blocks": 1,
               "rows_available": 1000000,
-              "rows_scanned": 28192,
-              "rows_matched": 16068,
+              "rows_scanned": 1024,
+              "rows_matched": 10,
               "columns_read": [
                 "symbol",
-                "close",
-                "volume"
+                "timestamp",
+                "close"
               ],
               "column_count": 3,
-              "pruning_rate": 0.94,
-              "block_pruning_rate": 0.5333333333333333,
-              "native_filter_used": true,
-              "native_rows_evaluated": 28192
+              "pruning_rate": 0.99,
+              "block_pruning_rate": 0.9
             },
             "result_row_count": 1,
             "runtime_ms": {
               "runs": [
-                18.845,
-                19.632,
-                19.027
+                1.977,
+                2.12
               ],
-              "median": 19.027,
-              "min": 18.845,
-              "max": 19.632
+              "median": 2.048,
+              "min": 1.977,
+              "max": 2.12
             }
           }
         }
-      }
+      },
+      "title": "Narrow Single-Symbol Windowed Average Close",
+      "query_sql": "SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2"
     }
   ]
 }

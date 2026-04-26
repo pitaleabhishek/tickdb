@@ -1,7 +1,7 @@
 PYTHON ?= python3
 PIP ?= pip
 
-.PHONY: install test demo benchmark-baseline benchmark-block-index benchmark-native-scan clean
+.PHONY: install test demo benchmark-layout benchmark-block-pruning benchmark-native-scan benchmark-baseline benchmark-block-index clean
 
 install:
 	$(PIP) install -e .
@@ -12,14 +12,18 @@ test:
 demo:
 	$(PYTHON) examples/demo.py
 
-benchmark-baseline:
-	$(PYTHON) benchmarks/run_layout_baselines.py
+benchmark-layout:
+	$(PYTHON) benchmarks/run_layout_benchmarks.py
 
-benchmark-block-index:
-	$(PYTHON) benchmarks/run_block_index_comparison.py
+benchmark-block-pruning:
+	$(PYTHON) benchmarks/run_block_pruning_benchmarks.py
 
 benchmark-native-scan:
-	$(PYTHON) benchmarks/run_native_scan_comparison.py
+	$(PYTHON) benchmarks/run_native_scan_benchmarks.py
+
+benchmark-baseline: benchmark-layout
+
+benchmark-block-index: benchmark-block-pruning
 
 clean:
 	rm -rf build dist .pytest_cache *.egg-info
