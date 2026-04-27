@@ -5,7 +5,10 @@ TickDB is a from-scratch analytical storage engine for OHLCV market data. It imp
 ## Index
 
 - [Why This Project](#why-this-project)
+- [Appendix: Key Terms](#appendix-key-terms)
 - [Architecture](#architecture)
+- [Success Criteria](#success-criteria)
+- [Non-Goals](#non-goals)
 - [Benchmark Highlights](#benchmark-highlights)
 - [Storage Layout](#storage-layout)
 - [Design Decisions](#design-decisions)
@@ -14,10 +17,9 @@ TickDB is a from-scratch analytical storage engine for OHLCV market data. It imp
 - [Native C Scan Kernel](#native-c-scan-kernel)
 - [Benchmark Results](#benchmark-results)
 - [Design Inspirations](#design-inspirations)
+- [Use of AI](#use-of-ai)
 - [Production Considerations](#production-considerations)
 - [Quickstart](#quickstart)
-- [Success Criteria](#success-criteria)
-- [Non-Goals](#non-goals)
 - [Future Work](#future-work)
 
 ## Why This Project
@@ -32,6 +34,36 @@ Market-data analytics is not a generic workload. OHLCV queries are structurally 
 Those patterns reward workload-aware storage design in specific ways. Physical row order determines which chunks can be skipped. Metadata granularity determines how much of a surviving chunk still has to be scanned. Scan strategy determines how fast the remaining rows are evaluated. Each of those is a separate, measurable lever.
 
 TickDB is not trying to compete with QuestDB or DuckDB as a production system. It is a focused OHLCV analytics engine that makes storage layout and pruning tradeoffs explicit, measurable, and benchmarkable.
+
+
+## Appendix: Key Terms
+
+| Term | Meaning |
+|---|---|
+| OHLCV | Market data format containing open, high, low, close, and volume values for a symbol over time. |
+| WAL | Write-ahead log. TickDB first writes incoming rows here before converting them into analytical storage. |
+| WAL Segment | A smaller immutable WAL file created after a configured number of rows. |
+| Compaction | The process of converting row-oriented WAL data into columnar chunk files optimized for analytical reads. |
+| Columnar Storage | A storage format where each column is stored separately, such as `close.f64`, `volume.i64`, and `symbol.ids.u32`. |
+| Chunk | A compacted group of rows stored inside a partition. Queries scan chunks only when relevant. |
+| Block | A smaller section inside a chunk. TickDB uses blocks for finer-grained pruning. |
+| Encoding | A compact way to store values. TickDB uses dictionary encoding, base-plus-offset encoding, and fixed-width numeric files. |
+| Dictionary Encoding | Stores repeated string values, such as symbols, as smaller integer IDs. |
+| Base-Plus-Offset Encoding | Stores a base timestamp once, then stores row timestamps as offsets from that base. |
+| Fixed-Width Numeric Encoding | Stores numeric columns in fixed-size binary files for faster reads. |
+| Metadata | Small summary information about partitions, chunks, and blocks used to decide what data can be skipped. |
+| Pruning | Skipping irrelevant partitions, chunks, or blocks before reading heavier column data. |
+| Chunk-Level Pruning | Skipping entire chunks using chunk metadata. |
+| Block-Level Pruning | Skipping smaller blocks inside a chunk using block metadata. |
+| mmap | Memory-mapped file access. TickDB uses it to read fixed-width column files efficiently. |
+| Query Planner | The component that decides which columns are required and which chunks or blocks may need to be scanned. |
+| Required Columns | The minimum set of columns needed to answer a query. For example, `avg:close` with `symbol=AAPL` needs only `symbol` and `close`. |
+| Native Scan Kernel | A small C function used for performance-critical numeric filtering. |
+| Scan Pushdown | Moving eligible filtering work closer to the storage/read layer instead of doing all filtering in Python. |
+| Aggregation | A calculation over rows, such as `count`, `sum`, `avg`, `min`, or `max`. |
+| Layout | The physical ordering of compacted rows, such as `time` or `symbol_time`. |
+
+
 
 
 ## Architecture
@@ -56,29 +88,38 @@ flowchart TD
 
 The write path and read path are intentionally split. Incoming rows land in a row-based WAL first because append-only logging is simple and stable. Read-optimized storage is built later by compaction, which sorts rows into a chosen physical layout, writes encoded column files, and emits metadata summaries that queries can use to avoid unnecessary scan work. That separation is the core architectural move in the project.
 
-At a high level, the data flow is:
 
-```text
-CSV / Synthetic OHLCV Data
-        ↓
-Row-based WAL append
-        ↓
-WAL-to-columnar compaction
-        ↓
-Encoded column chunks (two physical layouts)
-        ↓
-Chunk-level zone map pruning
-        ↓
-Block-level page index pruning within surviving chunks
-        ↓
-mmap-based column reads
-        ↓
-Native C scan kernel (numeric predicates)
-        ↓
-Python aggregation
-        ↓
-Result + execution metrics
-```
+## Success Criteria
+
+> physical layout plus lightweight metadata can materially reduce OHLCV query cost.
+
+TickDB should be able to:
+
+- generate or ingest OHLCV data into a per-table WAL
+- compact WAL data into chunked columnar storage
+- support both `time` and `symbol_time` physical layouts
+- encode symbols, timestamps, and numeric columns using simple storage-aware encodings
+- read only the columns required by a query
+- use chunk-level and block-level metadata to skip irrelevant scan work
+- return correct results for supported aggregations: `count`, `sum`, `avg`, `min`, and `max`
+- expose query metrics showing scanned chunks, skipped chunks, scanned blocks, skipped blocks, rows scanned, rows matched, and native-scan usage
+- benchmark layout impact for different OHLCV query shapes
+- benchmark full scan vs pruned scan paths
+- benchmark Python filtering vs native C scan filtering
+- run from a fresh clone using the documented quickstart, demo, test, and benchmark commands
+
+## Non-Goals
+
+TickDB does not aim to support:
+
+- Full SQL parsing
+- Joins
+- Distributed execution
+- Concurrent writers
+- Production-grade crash recovery
+- Real-time streaming ingestion
+
+
 
 ## Benchmark Highlights
 
@@ -91,16 +132,21 @@ In these benchmarks, the same logical OHLCV data is compacted twice:
 - `symbol_time`
   means rows are sorted by `(symbol, timestamp)`
 
-So the benchmark question is not "which query is faster in the abstract?" It is "how much does physical row order change pruning power and scan cost for the same query?"
 
-The benchmark story is sequential: first layout changes how much data can be skipped, then chunk and block metadata reduce the working set, and only after that does the native C kernel speed up the last remaining numeric predicate loop.
 
-| Highlight | Result |
+The benchmarks test one core idea:
+
+> changing physical layout and using lightweight metadata can reduce how much data TickDB has to scan.
+
+The committed `1,000,000`-row benchmarks show three results:
+
+| What was tested | What happened |
 | --- | --- |
-| Narrow time-window query | `time` wins because timestamp ordering keeps chunk ranges tight: `11.711 ms` vs `68.414 ms` for `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`. |
-| Single-symbol query | `symbol_time` wins because all rows for one symbol are co-located: `94.456 ms` vs `557.618 ms` for `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'`. |
-| Three-stage scan reduction | On `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150`, the work falls from `626.259 ms / 1,000,000 rows` to `45.222 ms / 60,000 rows`, then to `25.133 ms / 28,192 rows`. |
-| Native scan on the reduced set | On that same threshold query, native scan lowers median runtime again from `25.133 ms` to `19.027 ms` once pruning has already minimized scan volume. |
+| Physical layout | The `time` layout is faster for narrow timestamp queries because timestamp ordering keeps chunk ranges tight: `11.711 ms` vs `68.414 ms` for `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2`. The `symbol_time` layout is faster for single-symbol queries because rows for one symbol are co-located: `94.456 ms` vs `557.618 ms` for `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'`. |
+| Metadata pruning | On `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150`, pruning reduces scan work from `626.259 ms / 1,000,000 rows` to `45.222 ms / 60,000 rows`, then to `25.133 ms / 28,192 rows`. This compares full scan, chunk pruning, and chunk + block pruning. |
+| Native scan kernel | On the same threshold query as above, native scan lowers median runtime even more, from `25.133 ms` to `19.027 ms` after pruning has already reduced the candidate rows. |
+
+In simple terms: TickDB gets faster by first storing data in a useful order, then skipping irrelevant chunks and blocks, and finally using C only for the hottest remaining numeric filter loop.
 
 ## Storage Layout
 
@@ -363,6 +409,13 @@ TickDB implements simplified versions of established ideas in a focused OHLCV co
 - Time-sorted layout justification: QuestDB designated timestamp  
   https://questdb.com/docs/concept/designated-timestamp/
 
+## Use of AI
+
+AI was used as an implementation accelerator throughout this project. The system design, feature selection, scope constraints, and benchmark goals were human directed. I studied the relevant papers, database internals, and engine documentation first, then used AI to translate those decisions into working code faster.
+
+Benchmark results in this README come from committed benchmark outputs, not AI-generated claims. Tests were written with AI assistance, but correctness was validated by running the full test suite, demo flow, and benchmark scripts.
+
+
 ## Production Considerations
 
 In production, it usually would not make sense to expose both layouts as a user choice. A real system would pick physical organization based on the dominant workload. Time-series systems often resolve the tradeoff with time-based directory partitioning at the macro level and additional sorting within partitions. QuestDB is the clearest time-first example because its designated timestamp drives both physical ordering and partition pruning.
@@ -473,30 +526,6 @@ make benchmark-block-pruning
 make benchmark-native-scan
 ```
 
-## Success Criteria
-
-The project is successful if it can:
-
-- generate or ingest OHLCV data
-- append rows into a per-table WAL
-- compact WAL data into chunked columnar files
-- read only required columns for a query
-- prune chunks and intra-chunk blocks using symbol, time, and numeric metadata
-- return correct analytical aggregates
-- benchmark full scan vs pruned scan paths
-- benchmark Python filtering vs native filtering
-- run from a fresh clone with clear instructions
-
-## Non-Goals
-
-TickDB does not aim to support:
-
-- Full SQL parsing
-- Joins
-- Distributed execution
-- Concurrent writers
-- Production-grade crash recovery
-- Real-time streaming ingestion
 
 ## Future Work
 
