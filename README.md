@@ -215,7 +215,7 @@ Chunk summaries and block summaries are computed once at write time and then reu
 
 The project does not try to move the whole executor into C. Only block-local numeric predicates are pushed down. Planning, metadata reasoning, fallback behavior, row recheck, and aggregation stay in Python.
 
-### 6. Execution Metrics Are First-Class
+### 6. Execution Metrics
 
 Every query returns result rows and also cost-facing metrics:
 
@@ -294,40 +294,44 @@ They are complementary, not redundant. Together they reduce scan work to the min
 
 For append-only high-throughput OHLCV ingestion, index maintenance is the wrong trade. B-tree-style indexes add write amplification and per-row maintenance cost. Zone maps and block summaries are computed once during compaction, cost very little to maintain, and still eliminate most irrelevant scan work. That is why analytical engines such as DuckDB, ClickHouse, and time-series engines centered on partition pruning lean heavily on min/max metadata instead of OLTP-style indexes.
 
-### Actual Pruning Numbers
+## Benchmark Results
 
-#### Threshold Query: Full Scan vs Chunk Pruning vs Chunk + Block Pruning
+All benchmarks run on 1,000,000 rows, 10 symbols (AAPL, MSFT, NVDA, AMZN, GOOG, META, TSLA, AMD, AVGO, SPY), chunk size 10,000, block size 1,024 rows. Results are median of 3 measured runs after 1 warmup run.
 
-For:
+---
 
-```text
-sum(volume) where symbol = NVDA and close > 150
-```
+### Layout Baseline — `time` vs `symbol_time`
 
-measured on the pure-Python execution path:
+| Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
+| --- | ---: | ---: | --- | --- |
+| `SELECT COUNT(*) FROM bars` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
+| `SELECT AVG(close) FROM bars WHERE timestamp BETWEEN t1 AND t2` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
+| `SELECT SUM(volume) FROM bars WHERE symbol = 'NVDA'` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
+| `SELECT AVG(close) FROM bars WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
 
-| Stage | Physical Setup | Median ms | Rows Scanned | Interpretation |
+Physical layout matters only when pruning is selective. Full scans are neutral across both layouts. Once the query is selective, the winner is whichever layout clusters the filtered dimension. A pure time-range query favors `time` layout. A symbol-bounded query favors `symbol_time` layout. The combined symbol + time query favors `symbol_time` because symbol co-location eliminates more chunks first.
+
+---
+
+### Two-Stage Pruning — Chunk vs Chunk + Block
+
+For `SELECT SUM(volume) FROM bars WHERE symbol = 'NVDA' AND close > 150`, measured on the pure-Python execution path:
+
+| Stage | Physical Setup | Median ms | Rows Scanned | Effect |
 | --- | --- | ---: | ---: | --- |
-| Full scan | `time` layout | `626.259` | `1,000,000` | this layout offers no useful pruning for this query shape |
-| Chunk pruning | `symbol_time` layout, coarse blocks | `45.222` | `60,000` | chunk metadata removes `94%` of chunks |
-| Chunk + block pruning | `symbol_time` layout, 1024-row blocks | `25.133` | `28,192` | block metadata removes `53.3%` of rows that survived chunk pruning |
+| Full scan | `time` layout | `626.259` | `1,000,000` | no useful pruning for this query shape |
+| Chunk pruning only | `symbol_time`, coarse blocks | `45.222` | `60,000` | chunk metadata removes 94% of chunks |
+| Chunk + block pruning | `symbol_time`, 1,024-row blocks | `25.133` | `28,192` | block index removes 53% of rows surviving chunk pruning |
 
-The numbers show two separate effects. First, symbol clustering plus chunk metadata collapses a million-row scan to sixty thousand rows. Second, the block index cuts the surviving scan from sixty thousand rows to 28,192 rows. The full path goes from `626.259 ms` to `25.133 ms` without a traditional secondary index.
+Two separate effects stack here. Symbol clustering plus chunk metadata collapses a million-row scan to 60,000 rows. The block index then cuts 60,000 rows to 28,192. The full path goes from 626ms to 25ms without a traditional secondary index.
 
-#### Narrow-Window Query: Chunk Pruning vs Chunk + Block Pruning
+Chunk pruning and block pruning are complementary, not redundant. Chunk pruning eliminates irrelevant chunks before any chunk-local I/O. Block pruning eliminates irrelevant row ranges inside surviving chunks. Together they reduce scan work to the minimum possible given the physical layout.
 
-| Query | Layout | Chunk-Only Rows | Chunk + Block Rows | Median ms |
-| --- | --- | ---: | ---: | ---: |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `10,000` | `1,024` | `9.294 -> 2.040` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `100,000` | `10,240` | `70.509 -> 9.710` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `time` | `10,000` | `1,024` | `7.726 -> 1.855` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `symbol_time` | `10,000` | `1,024` | `10.247 -> 1.918` |
+---
 
-These are the `~90%` row-reduction cases: `10,000 -> 1,024` and `100,000 -> 10,240`. They show where the block index is strongest: once the candidate chunks are correct, the remaining work can still be cut sharply by pruning row ranges inside those chunks.
+### Native C Scan Kernel — Python vs Native
 
-## Native C Scan Kernel
-
-After two stages of metadata pruning, the remaining hot work is evaluating numeric predicates over surviving block-local numeric arrays. At that point, Python’s per-row overhead starts to matter: type handling, object lifetimes, interpreter dispatch, and repeated numeric comparisons.
+After two stages of metadata pruning, the remaining hot work is evaluating numeric predicates over surviving block-local numeric arrays. At that point, Python's per-row overhead starts to matter: type handling, object lifetimes, interpreter dispatch, and repeated numeric comparisons.
 
 The native kernel removes that overhead. It takes:
 
@@ -351,52 +355,16 @@ Python still owns:
 - exact row recheck
 - aggregation
 
-The native boundary is intentionally narrow: only block-local numeric predicates are pushed down. Metadata first narrows the candidate set, then execution evaluates the surviving rows exactly, while the higher-level engine still controls planning and aggregation.
+The native boundary is intentionally narrow: only block-local numeric predicates are pushed down. Metadata first narrows the candidate set, then the C kernel evaluates the surviving rows exactly, while the higher-level engine still controls planning and aggregation. This mirrors the BRIN model: metadata says "maybe," the executor evaluates the surviving rows exactly ([PostgreSQL BRIN](https://www.postgresql.org/docs/17/brin.html)).
 
-### Actual Native Scan Numbers
-
-| Query | Layout | Python ms | Native ms | Native Rows Evaluated | Speedup |
+| Query | Layout | Python ms | Native ms | Rows Evaluated | Speedup |
 | --- | --- | ---: | ---: | ---: | --- |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `1,024` | `7.66% faster` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `10,240` | `45.46% faster` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `1,000,000` | `19.89% faster` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `28,192` | `26.27% faster` |
+| `SELECT AVG(close) FROM bars WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `1,024` | 7.66% faster |
+| `SELECT AVG(close) FROM bars WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `10,240` | 45.46% faster |
+| `SELECT SUM(volume) FROM bars WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `1,000,000` | 19.89% faster |
+| `SELECT SUM(volume) FROM bars WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `28,192` | 26.27% faster |
 
-When pruning has already reduced the surviving scan to about a thousand values, the gain is small. When the surviving numeric loop is still large, the native path produces the visible `20–45%` speedups in the committed benchmarks.
-
-## Benchmark Results
-
-### Layout Baseline — `time` vs `symbol_time`
-
-| Query | `time` median ms | `symbol_time` median ms | Winner | Rows Scanned |
-| --- | ---: | ---: | --- | --- |
-| `SELECT COUNT(*) FROM OHLCV_table` | `486.034` | `485.816` | neutral | `1,000,000` vs `1,000,000` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `11.711` | `68.414` | `time` | `10,000` vs `100,000` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA'` | `557.618` | `94.456` | `symbol_time` | `1,000,000` vs `100,000` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE symbol = 'NVDA' AND timestamp BETWEEN t1 AND t2` | `34.312` | `11.623` | `symbol_time` | `50,000` vs `10,000` |
-
-This table proves that physical layout matters only when pruning is selective. Full scans are neutral. Once the query shape is selective, the better layout is the one that clusters the dimension the predicate cares about.
-
-### Three-Stage Pruning
-
-| Stage | Median ms | Rows Scanned |
-| --- | ---: | ---: |
-| Full scan (`time`, no useful pruning) | `626.259` | `1,000,000` |
-| Chunk pruning only (`symbol_time`, coarse blocks) | `45.222` | `60,000` |
-| Chunk + block pruning (`symbol_time`, 1024-row blocks) | `25.133` | `28,192` |
-
-This table proves that layout and metadata stack rather than compete. The move to `symbol_time` plus chunk summaries removes most of the work first. The block index then removes a second large fraction from the surviving scan.
-
-### Python vs Native C Scan
-
-| Query | Layout | Python ms | Native ms | Speedup |
-| --- | --- | ---: | ---: | --- |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `time` | `2.442` | `2.255` | `7.66% faster` |
-| `SELECT AVG(close) FROM OHLCV_table WHERE timestamp BETWEEN t1 AND t2` | `symbol_time` | `8.760` | `4.778` | `45.46% faster` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `time` | `597.195` | `478.409` | `19.89% faster` |
-| `SELECT SUM(volume) FROM OHLCV_table WHERE symbol = 'NVDA' AND close > 150` | `symbol_time` | `25.808` | `19.027` | `26.27% faster` |
-
-This table proves that the native kernel is doing the right kind of work. It does not affect planning or semantics. It only accelerates the hottest remaining predicate loop once metadata has already reduced I/O.
+Native speedup scales with surviving row count. When pruning has already reduced the scan to ~1,000 rows the gain is modest. When the surviving numeric loop is still large the native path produces 20–45% speedups. The kernel does not affect planning, pruning decisions, or aggregation semantics but only accelerates the hottest remaining predicate loop.
 
 ## Design Inspirations
 
